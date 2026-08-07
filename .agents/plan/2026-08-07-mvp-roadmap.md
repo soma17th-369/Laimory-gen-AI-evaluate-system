@@ -51,10 +51,11 @@ app/
 - [x] `app/langfuse_client.py`: SDK(`client.api.trace.list`/`get`)로 트레이스/관측치 조회(이름·user·기간 필터)
 - [x] Streamlit 에 트레이스 목록·상세 표시(input/output·모델·토큰). 키는 `SecretStr`, 본문은 화면에만
 
-### M2 — 분석·점수·문제점
-- [ ] 채점 기준(rubric)·점수 척도 정의 (→ 미결: 값 범위/항목)
-- [ ] 선택 트레이스 분석 → 점수·문제점 산출 (LLM-as-judge, OpenAI 잠정)
-- [ ] 결과를 화면에 표시
+### M2 — 분석·점수·문제점 ✅ (코드; 라이브 채점은 OPENAI_API_KEY 확보 후)
+- [x] 채점 기준·척도 정의 (7기준, 각 0~10 + overall)
+- [x] 선택 트레이스 분석 → 점수·문제점 (OpenAI structured output, 기본 gpt-4o·설정형)
+- [x] 결과 화면 표시 (점수표 + 문제점 목록)
+- 상세 설계: [M2 분석·채점](2026-08-07-m2-분석-채점.md)
 
 ### M3 — 리포트
 - [ ] 분석·점수·문제점을 리포트로 조립, 화면 표시 + 내보내기(md/json)
