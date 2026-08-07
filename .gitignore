@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# uv 로컬 캐시 (AGENT.md 규칙: UV_CACHE_DIR=.uv-cache)
+.uv-cache/
