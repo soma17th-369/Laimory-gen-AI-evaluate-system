@@ -166,6 +166,7 @@ def main() -> None:
         page_title="Laimory 생성형 AI 평가",
         page_icon="🔍",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
     st.title("Laimory 생성형 AI 평가 도구")
     st.caption("LangFuse 로그 분석 · 점수 · 문제점 · 프롬프트 개선 · 테스트 데이터 생성")
