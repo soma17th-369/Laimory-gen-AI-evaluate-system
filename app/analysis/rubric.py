@@ -51,6 +51,13 @@ def _as_text(value: Any, limit: int = 20000) -> str:
     return text
 
 
+_EVENT_FIELD_HINT = (
+    "각 event 필드: title·description(사용자 노출 문장), startTime·endTime(시각), "
+    "address·placeLabel(장소), question(회고 질문), eventType·confidence·inferenceLevel·"
+    "sourceRefs·uncertainty(근거·불확실성)."
+)
+
+
 def build_user_prompt(evidence: dict) -> str:
     """assemble_evidence() 결과를 채점용 사용자 메시지로 조립한다."""
     obs = evidence.get("observations") or []
@@ -58,7 +65,9 @@ def build_user_prompt(evidence: dict) -> str:
     return (
         f"트레이스 이름: {evidence.get('name')}\n\n"
         f"[입력 근거 — 수집 스냅샷]\n{evidence.get('input')}\n\n"
-        f"[최종 출력 — 타임라인]\n{evidence.get('output')}\n\n"
+        f"[최종 출력 — 타임라인 events · 출처: {evidence.get('output_source')}]\n"
+        f"{_EVENT_FIELD_HINT}\n{evidence.get('output')}\n\n"
         f"[관측치 목록(참고)]\n{obs_lines}\n\n"
-        "위 근거로 7개 기준을 채점하고 문제점을 정리하라."
+        "위 근거로 7개 기준을 채점하고 문제점을 정리하라. "
+        "채점 대상은 최종 타임라인 events 이고, 입력 스냅샷은 근거 대조용이다."
     )

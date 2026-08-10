@@ -32,8 +32,47 @@ def get_openai_client() -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key.get_secret_value())
 
 
+# 최종 타임라인을 담는 관측치 이름 우선순위. main agent 그래프의 산출 위치(AGENT.md 참고).
+_TIMELINE_OBS_PRIORITY = ("main-agent", "question-agent", "store-timeline")
+
+
+def _observation_timeline(observation: Any) -> Any:
+    """관측치 output 에서 events 를 가진 timeline dict 를 꺼낸다. 없으면 None."""
+    out = getattr(observation, "output", None)
+    if isinstance(out, dict):
+        timeline = out.get("timeline")
+        if isinstance(timeline, dict) and timeline.get("events"):
+            return timeline
+    return None
+
+
+def find_final_timeline(trace_detail: Any) -> Any:
+    """트레이스에서 채점 대상인 최종 타임라인(events 포함)을 찾는다.
+
+    실제 산출물은 ``trace.output``(운영 메타)이 아니라 관측치 output 의 ``timeline`` 에 있다.
+    main-agent(오케스트레이터 최종 결과)를 우선하고, 없으면 다른 관측치를 훑는다.
+    """
+    observations = list(getattr(trace_detail, "observations", []) or [])
+    by_name = {getattr(o, "name", None): o for o in observations}
+    for name in _TIMELINE_OBS_PRIORITY:
+        observation = by_name.get(name)
+        if observation is not None:
+            timeline = _observation_timeline(observation)
+            if timeline is not None:
+                return timeline
+    for observation in observations:
+        timeline = _observation_timeline(observation)
+        if timeline is not None:
+            return timeline
+    return None
+
+
 def assemble_evidence(trace_detail: Any) -> dict:
-    """트레이스 상세 → judge 근거 dict(이름·입력·출력·관측치 요약). 본문은 잘라서 담는다."""
+    """트레이스 상세 → judge 근거 dict(이름·입력·최종 타임라인·관측치 요약).
+
+    출력 근거는 **관측치의 최종 타임라인**이다. 못 찾으면 ``trace.output`` 으로 폴백하되,
+    그 사실을 근거에 표시해 judge 가 불완전 근거임을 알게 한다.
+    """
     observations = list(getattr(trace_detail, "observations", []) or [])
     obs_brief = [
         {
@@ -42,10 +81,18 @@ def assemble_evidence(trace_detail: Any) -> dict:
         }
         for o in observations
     ]
+    timeline = find_final_timeline(trace_detail)
+    if timeline is not None:
+        output_text = _as_text(timeline, limit=40000)
+        output_source = "관측치 최종 타임라인(events)"
+    else:
+        output_text = _as_text(getattr(trace_detail, "output", None))
+        output_source = "trace.output 폴백 — 최종 타임라인을 못 찾음(불완전 근거)"
     return {
         "name": getattr(trace_detail, "name", None),
         "input": _as_text(getattr(trace_detail, "input", None)),
-        "output": _as_text(getattr(trace_detail, "output", None)),
+        "output": output_text,
+        "output_source": output_source,
         "observations": obs_brief,
     }
 
