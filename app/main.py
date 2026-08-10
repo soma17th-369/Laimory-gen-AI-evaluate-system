@@ -24,6 +24,7 @@ import streamlit as st  # noqa: E402
 from app.analysis.judge import OpenAINotConfigured, score_trace  # noqa: E402
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.improve.suggest import suggest_prompt_improvements  # noqa: E402
 from app.report.build import build_report  # noqa: E402
 from app.report.export import report_to_json, report_to_markdown  # noqa: E402
 from app.report.schema import ReportItem  # noqa: E402
@@ -170,6 +171,36 @@ def _render_judge_section(trace_id: str, detail: object) -> None:
     card = st.session_state.get("scorecards", {}).get(trace_id)
     if card is not None:
         _render_scorecard(card)
+        _render_prompt_review(trace_id, detail, card)
+
+
+def _render_prompt_review(trace_id: str, detail: object, card: object) -> None:
+    st.markdown("##### 프롬프트 개선 제안")
+    if st.button("프롬프트 개선 제안 생성", key=f"review_{trace_id}"):
+        try:
+            with st.spinner("프롬프트 분석 중… (OpenAI)"):
+                review = suggest_prompt_improvements(detail, card)
+            st.session_state.setdefault("reviews", {})[trace_id] = review
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"제안 실패: {type(exc).__name__}: {exc}")
+
+    review = st.session_state.get("reviews", {}).get(trace_id)
+    if review is None:
+        return
+    st.caption(review.summary)
+    if not review.suggestions:
+        st.caption("제안 없음")
+        return
+    rows = [
+        {
+            "단계": s.target_step,
+            "기준": ", ".join(CRITERION_LABELS.get(c, c) for c in s.related_criteria),
+            "문제": s.problem,
+            "수정안": s.suggestion,
+        }
+        for s in review.suggestions
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_detail(trace_id: str) -> None:
