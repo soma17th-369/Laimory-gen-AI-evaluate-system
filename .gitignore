@@ -219,3 +219,6 @@ __marimo__/
 
 # uv 로컬 캐시 (AGENT.md 규칙: UV_CACHE_DIR=.uv-cache)
 .uv-cache/
+
+# 파일 저장 데이터 (로그·평가·개선책·테스트데이터) — 로컬 전용
+data/
