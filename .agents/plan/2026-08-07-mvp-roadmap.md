@@ -1,6 +1,6 @@
 # LangFuse 평가 GUI — 초기 로드맵과 부트스트랩
 
-- 상태: 진행 (M0 완료)
+- 상태: 진행 (M0·M1 완료 — M1 라이브 검증 통과)
 - 관련 이슈: (없음)
 
 ## 배경·목표
@@ -47,9 +47,9 @@ app/
 - [x] `app/main.py` 최소 Streamlit 화면 + `uv run streamlit run app/main.py` 기동 확인(헬스체크 통과)
 - [x] `app/config.py` 로 LangFuse 키/host 를 env 에서 로딩(+ `.env.example`), `SecretStr` 로 미로깅
 
-### M1 — 수집
-- [ ] `app/langfuse_client.py`: SDK 로 트레이스/generation 조회(기간·이름·태그 필터)
-- [ ] Streamlit 에 트레이스 목록·상세 표시(프롬프트·출력·토큰). 본문은 화면에만, 로그엔 안 남김
+### M1 — 수집 ✅ (라이브 검증 통과: jp 리전 실프로젝트에서 트레이스 목록·상세 조회 확인)
+- [x] `app/langfuse_client.py`: SDK(`client.api.trace.list`/`get`)로 트레이스/관측치 조회(이름·user·기간 필터)
+- [x] Streamlit 에 트레이스 목록·상세 표시(input/output·모델·토큰). 키는 `SecretStr`, 본문은 화면에만
 
 ### M2 — 분석·점수·문제점
 - [ ] 채점 기준(rubric)·점수 척도 정의 (→ 미결: 값 범위/항목)
