@@ -24,6 +24,9 @@ import streamlit as st  # noqa: E402
 from app.analysis.judge import OpenAINotConfigured, score_trace  # noqa: E402
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.report.build import build_report  # noqa: E402
+from app.report.export import report_to_json, report_to_markdown  # noqa: E402
+from app.report.schema import ReportItem  # noqa: E402
 from app.langfuse_client import (  # noqa: E402
     LangfuseNotConfigured,
     get_trace,
@@ -218,6 +221,53 @@ def _render_detail(trace_id: str) -> None:
                 _render_value("output", getattr(obs, "output", None))
 
 
+def _render_report_section() -> None:
+    cards: dict = st.session_state.get("scorecards", {})
+    if not cards:
+        return
+
+    st.divider()
+    st.header("채점 리포트")
+
+    id_to_summary = {s["id"]: s for s in (trace_summary(t) for t in st.session_state.get("traces", []) or [])}
+    items = []
+    for trace_id, card in cards.items():
+        summary = id_to_summary.get(trace_id, {})
+        ts = summary.get("timestamp")
+        items.append(
+            ReportItem(
+                trace_id=trace_id,
+                name=summary.get("name"),
+                timestamp=str(ts) if ts is not None else None,
+                scorecard=card,
+            )
+        )
+
+    report = build_report(items, judge_model=get_settings().openai_judge_model)
+    su = report.summary
+    st.caption(f"채점한 트레이스 {su.trace_count}건 · 평균 전반 {su.avg_overall}/10 · judge `{report.judge_model}`")
+
+    rows = [{"기준": CRITERION_LABELS[k], "평균": f"{su.avg_by_criterion.get(k)}/10"} for k in CRITERION_KEYS]
+    rows.append({"기준": CRITERION_LABELS["overall"], "평균": f"{su.avg_overall}/10"})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    col1, col2 = st.columns(2)
+    col1.download_button(
+        "리포트 .md 다운로드",
+        data=report_to_markdown(report),
+        file_name="scorecard-report.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+    col2.download_button(
+        "리포트 .json 다운로드",
+        data=report_to_json(report),
+        file_name="scorecard-report.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Laimory 생성형 AI 평가",
@@ -259,6 +309,8 @@ def main() -> None:
     if selected_id:
         st.divider()
         _render_detail(selected_id)
+
+    _render_report_section()
 
 
 if __name__ == "__main__":
