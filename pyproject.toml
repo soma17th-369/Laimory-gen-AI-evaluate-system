@@ -1,0 +1,11 @@
+[project]
+name = "laimory-gen-ai-evaluate-system"
+version = "0.1.0"
+description = "Laimory 생성형 AI 품질 평가 로컬 GUI 도구 (LangFuse 로그 분석 · 점수 · 프롬프트 개선 · 테스트 데이터 생성)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "langfuse>=4.14.3",
+    "pydantic-settings>=2.14.2",
+    "streamlit>=1.61.1",
+]
