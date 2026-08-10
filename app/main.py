@@ -26,6 +26,7 @@ from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.improve.suggest import suggest_prompt_improvements  # noqa: E402
 from app.report.build import build_report  # noqa: E402
+from app.testdata.generate import generate_test_cases, testsuite_to_json  # noqa: E402
 from app.report.export import report_to_json, report_to_markdown  # noqa: E402
 from app.report.schema import ReportItem  # noqa: E402
 from app.langfuse_client import (  # noqa: E402
@@ -172,6 +173,7 @@ def _render_judge_section(trace_id: str, detail: object) -> None:
     if card is not None:
         _render_scorecard(card)
         _render_prompt_review(trace_id, detail, card)
+        _render_testcase_section(trace_id, card)
 
 
 def _render_prompt_review(trace_id: str, detail: object, card: object) -> None:
@@ -201,6 +203,38 @@ def _render_prompt_review(trace_id: str, detail: object, card: object) -> None:
         for s in review.suggestions
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_testcase_section(trace_id: str, card: object) -> None:
+    st.markdown("##### 테스트 케이스 생성")
+    if st.button("테스트 케이스 생성", key=f"testcase_{trace_id}"):
+        try:
+            with st.spinner("테스트 케이스 생성 중… (OpenAI)"):
+                suite = generate_test_cases(card)
+            st.session_state.setdefault("testsuites", {})[trace_id] = suite
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"생성 실패: {type(exc).__name__}: {exc}")
+
+    suite = st.session_state.get("testsuites", {}).get(trace_id)
+    if suite is None:
+        return
+    st.caption(suite.summary)
+    for idx, case in enumerate(suite.cases, 1):
+        crit = ", ".join(CRITERION_LABELS.get(c, c) for c in case.targets_criteria)
+        with st.expander(f"{idx}. {case.title}  ·  {crit}"):
+            st.write(case.description)
+            st.markdown("**기대 조건**")
+            for cond in case.expected:
+                st.markdown(f"- {cond}")
+            st.markdown("**입력(input)**")
+            st.json(case.input.model_dump(), expanded=False)
+    st.download_button(
+        "테스트 스위트 .json 다운로드",
+        data=testsuite_to_json(suite),
+        file_name="test-suite.json",
+        mime="application/json",
+        use_container_width=True,
+    )
 
 
 def _render_detail(trace_id: str) -> None:
