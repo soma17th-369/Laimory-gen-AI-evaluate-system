@@ -51,7 +51,7 @@ app/
 - [x] `app/langfuse_client.py`: SDK(`client.api.trace.list`/`get`)로 트레이스/관측치 조회(이름·user·기간 필터)
 - [x] Streamlit 에 트레이스 목록·상세 표시(input/output·모델·토큰). 키는 `SecretStr`, 본문은 화면에만
 
-### M2 — 분석·점수·문제점 ✅ (코드; 라이브 채점은 OPENAI_API_KEY 확보 후)
+### M2 — 분석·점수·문제점 ✅ (라이브 검증 통과: judge = gpt-5.6-sol)
 - [x] 채점 기준·척도 정의 (7기준, 각 0~10 + overall)
 - [x] 선택 트레이스 분석 → 점수·문제점 (OpenAI structured output, 기본 gpt-4o·설정형)
 - [x] 결과 화면 표시 (점수표 + 문제점 목록)
