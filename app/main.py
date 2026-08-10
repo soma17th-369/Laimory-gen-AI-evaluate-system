@@ -21,6 +21,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+from app.analysis.judge import OpenAINotConfigured, score_trace  # noqa: E402
+from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.langfuse_client import (  # noqa: E402
     LangfuseNotConfigured,
@@ -116,6 +118,57 @@ def _do_fetch(filters: dict) -> None:
         st.error(f"조회 실패: {type(exc).__name__}: {exc}")
 
 
+def _render_scorecard(card) -> None:
+    st.markdown(f"**종합 {card.overall.score} / 10** — {card.summary}")
+    rows = []
+    for key in CRITERION_KEYS:
+        item = getattr(card.scores, key)
+        rows.append({"기준": CRITERION_LABELS[key], "점수": f"{item.score}/10", "근거": item.reason})
+    rows.append(
+        {"기준": CRITERION_LABELS["overall"], "점수": f"{card.overall.score}/10", "근거": card.overall.reason}
+    )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if card.findings:
+        st.markdown("**문제점**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "기준": CRITERION_LABELS.get(f.criterion, f.criterion),
+                        "심각도": f.severity,
+                        "설명": f.description,
+                    }
+                    for f in card.findings
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("문제점 없음")
+
+
+def _render_judge_section(trace_id: str, detail: object) -> None:
+    st.markdown("#### 채점")
+    judge_enabled = get_settings().has_openai_credentials()
+    bcol, scol = st.columns([1, 3])
+    if bcol.button("이 트레이스 채점", disabled=not judge_enabled, key=f"judge_{trace_id}"):
+        try:
+            with st.spinner("채점 중… (OpenAI)"):
+                st.session_state.setdefault("scorecards", {})[trace_id] = score_trace(detail)
+        except OpenAINotConfigured as exc:
+            st.error(str(exc))
+        except Exception as exc:  # noqa: BLE001 - UI 에 실패를 그대로 보여준다
+            st.error(f"채점 실패: {type(exc).__name__}: {exc}")
+    if not judge_enabled:
+        scol.caption("채점하려면 `.env` 에 OPENAI_API_KEY 설정이 필요합니다.")
+
+    card = st.session_state.get("scorecards", {}).get(trace_id)
+    if card is not None:
+        _render_scorecard(card)
+
+
 def _render_detail(trace_id: str) -> None:
     cache: dict = st.session_state.setdefault("detail_cache", {})
     if trace_id not in cache:
@@ -134,6 +187,10 @@ def _render_detail(trace_id: str) -> None:
     cols[1].metric("cost", _fmt(getattr(detail, "total_cost", None)))
     cols[2].metric("관측치", len(observations))
     cols[3].metric("user", getattr(detail, "user_id", None) or "-")
+
+    st.divider()
+    _render_judge_section(trace_id, detail)
+    st.divider()
 
     left, right = st.columns(2)
     with left:

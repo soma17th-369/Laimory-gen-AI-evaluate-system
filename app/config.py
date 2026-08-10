@@ -30,9 +30,17 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # OpenAI (M2 채점/분석용). 키가 없으면 채점 기능만 비활성되고 조회는 정상.
+    openai_api_key: SecretStr | None = None
+    openai_judge_model: str = "gpt-4o"
+
     def has_langfuse_credentials(self) -> bool:
         """public/secret 키가 모두 설정됐는지."""
         return self.langfuse_public_key is not None and self.langfuse_secret_key is not None
+
+    def has_openai_credentials(self) -> bool:
+        """OpenAI 키가 설정됐는지(채점 가능 여부)."""
+        return self.openai_api_key is not None
 
 
 @lru_cache
