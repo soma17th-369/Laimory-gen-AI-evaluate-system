@@ -43,7 +43,7 @@ def _render_scorecard(card: Any) -> None:
         for k in CRITERION_KEYS
     ]
     rows.append({"기준": CRITERION_LABELS["overall"], "점수": f"{card.overall.score}/10", "근거": card.overall.reason})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
     if card.findings:
         st.markdown("**문제점**")
         st.dataframe(
@@ -53,7 +53,7 @@ def _render_scorecard(card: Any) -> None:
                     for f in card.findings
                 ]
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -98,7 +98,7 @@ def render() -> None:
         limit = st.number_input("개수", min_value=1, max_value=100, value=25)
         name = st.text_input("이름(name)", value="")
         user_id = st.text_input("user_id", value="")
-        if st.button("트레이스 조회", type="primary", use_container_width=True, disabled=not settings.has_langfuse_credentials()):
+        if st.button("트레이스 조회", type="primary", width="stretch", disabled=not settings.has_langfuse_credentials()):
             _fetch(int(limit), name, user_id)
 
     traces = st.session_state.get("tr_traces")
@@ -108,7 +108,7 @@ def render() -> None:
 
     summaries = [trace_summary(t) for t in traces]
     id_to_summary = {s["id"]: s for s in summaries}
-    st.dataframe(pd.DataFrame(summaries), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(summaries), width="stretch", hide_index=True)
 
     selected = st.selectbox(
         "상세 볼 트레이스",
@@ -139,7 +139,7 @@ def render() -> None:
     with st.expander("최종 타임라인(events)"):
         st.json(timeline if timeline is not None else {}, expanded=False)
     with st.expander("관측치 전체 처리과정"):
-        st.dataframe(pd.DataFrame([observation_row(o) for o in observations]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([observation_row(o) for o in observations]), width="stretch", hide_index=True)
 
     # 채점
     st.subheader("채점")

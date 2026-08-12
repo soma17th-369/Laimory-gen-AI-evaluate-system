@@ -44,7 +44,7 @@ def render() -> None:
     with st.sidebar:
         st.subheader("수집")
         limit = st.number_input("수집 개수", min_value=1, max_value=500, value=100)
-        if st.button("LangFuse 에서 수집", type="primary", disabled=not configured, use_container_width=True):
+        if st.button("LangFuse 에서 수집", type="primary", disabled=not configured, width="stretch"):
             try:
                 with st.spinner("수집 중…"):
                     n = _collect(int(limit))
@@ -64,18 +64,25 @@ def render() -> None:
         return
 
     df = pd.DataFrame(rows)
-    cost = pd.to_numeric(df.get("total_cost"), errors="coerce").fillna(0)
-    latency = pd.to_numeric(df.get("latency"), errors="coerce").fillna(0)
+
+    def _num(col: str) -> pd.Series:
+        """컬럼이 없거나 비숫자여도 안전한 숫자 Series 반환."""
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        return pd.Series([0.0] * len(df), index=df.index)
+
+    cost = _num("total_cost")
+    latency = _num("latency")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("트레이스 수", len(df))
     col2.metric("총 비용", f"{cost.sum():.3f}")
     col3.metric("평균 latency(s)", f"{latency.mean():.2f}" if len(df) else "-")
-    col4.metric("이름 종류", int(df["name"].nunique()) if "name" in df else 0)
+    col4.metric("이름 종류", int(df["name"].nunique()) if "name" in df.columns else 0)
 
     if "name" in df:
         st.subheader("이름별 분포")
         st.bar_chart(df["name"].value_counts())
 
     st.subheader("수집 목록")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
