@@ -109,12 +109,16 @@ def _clamp_scores(card: TraceScorecard) -> TraceScorecard:
     return card
 
 
-def score_trace(trace_detail: Any) -> TraceScorecard:
-    """트레이스 하나를 채점해 TraceScorecard 를 돌려준다."""
+def score_trace(trace_detail: Any, *, system_prompt: str | None = None) -> TraceScorecard:
+    """트레이스 하나를 채점해 TraceScorecard 를 돌려준다.
+
+    `system_prompt` 를 주면 그 채점 기준으로 채점한다(UI 편집본). 없으면 기본 rubric.
+    점수 항목(6기준+전반)은 스키마가 고정하므로 기준을 바꿔도 구조는 유지된다.
+    """
     client = get_openai_client()
     model = get_settings().openai_judge_model
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
         {"role": "user", "content": build_user_prompt(assemble_evidence(trace_detail))},
     ]
 

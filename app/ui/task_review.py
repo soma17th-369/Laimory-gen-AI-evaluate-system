@@ -12,7 +12,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from app.analysis.judge import score_trace
+from app.analysis.judge import assemble_evidence, score_trace
+from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS
 from app.config import get_settings
 from app.langfuse_client import LangfuseNotConfigured, get_trace, list_traces, trace_summary
@@ -65,16 +66,25 @@ def _fetch(limit: int, name: str, user_id: str) -> None:
         st.error(f"조회 실패: {type(exc).__name__}: {exc}")
 
 
-def _judge_and_save(trace_id: str, task_id: str, detail: Any) -> None:
+def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str) -> None:
     try:
         with st.spinner("채점 중… (OpenAI)"):
-            card = score_trace(detail)
+            card = score_trace(detail, system_prompt=system_prompt)
         st.session_state.setdefault("tr_cards", {})[trace_id] = card
+        path = evaluation_file(task_id)
         store.save_json(
-            evaluation_file(task_id),
-            {"taskId": task_id, "traceId": trace_id, "name": getattr(detail, "name", None), "scorecard": card.model_dump()},
+            path,
+            {
+                "taskId": task_id,
+                "traceId": trace_id,
+                "name": getattr(detail, "name", None),
+                "systemPrompt": system_prompt,  # 채점 기준(편집본)
+                "inputPrompt": build_user_prompt(assemble_evidence(detail)),  # 채점 입력 프롬프트
+                "scorecard": card.model_dump(),  # 결과
+            },
         )
-        st.toast(f"평가 저장: evaluations/{task_id}.json")
+        st.session_state["tr_saved_path"] = path.as_posix()
+        st.toast(f"평가 저장: {path.as_posix()}")
     except Exception as exc:  # noqa: BLE001
         st.error(f"채점 실패: {type(exc).__name__}: {exc}")
 
@@ -175,10 +185,25 @@ def render() -> None:
     _render_process(tj)
 
     st.subheader("채점")
-    if st.button("이 task 채점", disabled=not settings.has_openai_credentials(), key=f"judge_{selected}"):
-        _judge_and_save(selected, task_id, detail)
+    system_prompt = st.text_area(
+        "채점 기준 (system prompt · 편집 가능)",
+        value=SYSTEM_PROMPT,
+        height=280,
+        key=f"rubric_{selected}",
+        help="편집하면 이 기준으로 채점합니다. 점수 항목(6기준+전반)은 스키마로 고정됩니다.",
+    )
+    with st.expander("채점 입력 프롬프트 (judge 에 들어가는 근거)"):
+        st.code(build_user_prompt(assemble_evidence(detail)))
+
+    if st.button("이 task 채점", type="primary", disabled=not settings.has_openai_credentials(), key=f"judge_{selected}"):
+        _judge_and_save(selected, task_id, detail, system_prompt)
     if not settings.has_openai_credentials():
         st.caption("채점하려면 .env 에 OPENAI_API_KEY 설정이 필요합니다.")
+
+    saved_path = st.session_state.get("tr_saved_path")
+    if saved_path:
+        st.caption(f"저장 위치: `{saved_path}` (기준·입력 프롬프트·결과 포함)")
+
     card = st.session_state.get("tr_cards", {}).get(selected)
     if card is not None:
         _render_scorecard(card)
