@@ -20,6 +20,7 @@
 | 문서 | Scope | Read when | Related paths | Update when |
 | --- | --- | --- | --- | --- |
 | [domain/overview.md](domain/overview.md) | 시스템 목적·데이터 원천·처리 파이프라인 | 전체 그림·범위를 잡을 때 | (전역) | 목적·데이터 원천·파이프라인 단계가 바뀔 때 |
+| [domain/trace-json-spec.md](domain/trace-json-spec.md) | Task 리뷰 `trace.json` 저장 구조(정본·중복금지) | Page2 저장/표시, trace_builder 를 손댈 때 | `app/tasks/`·`app/ui/task_review.py`·`app/storage/` | trace.json 구조·정본·중복 규칙이 바뀔 때 |
 | [domain/ubiquitous-language.md](domain/ubiquitous-language.md) | 프로젝트 공통 용어(도메인 이름·필드·개념) | 새 이름/필드/개념을 만들거나 바꿀 때 | (전역) | 용어의 정의·표기가 바뀌거나 새 핵심 용어가 확정됐을 때 |
 | [conventions/issue.md](conventions/issue.md) | 이슈 제목·라벨 형식 | 이슈를 만들거나 제목을 고칠 때 | (해당 없음) | 허용 Type·아이콘·형식이 바뀔 때 |
 | [conventions/commit.md](conventions/commit.md) | 커밋 분할·메시지 형식 | commit 을 나누거나 message 를 쓸 때 | (전역) | 커밋 분할 기준·message 형식이 바뀔 때 |
