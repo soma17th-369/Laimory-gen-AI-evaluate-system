@@ -33,6 +33,11 @@ def collection_state_file() -> Path:
     return data_root() / "collection.state.json"
 
 
+def generation_rollup_file() -> Path:
+    """traceId → 모델·토큰 롤업 캐시. 트레이스 목록 API 에 없는 정보만 모아둔다."""
+    return data_root() / "generations.json"
+
+
 def tasks_dir() -> Path:
     return data_root() / "tasks"
 

@@ -20,7 +20,15 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from app.ui import dashboard, evaluation_results, improvement, log_collection, task_review, testdata  # noqa: E402
+from app.ui import (  # noqa: E402
+    dashboard,
+    evaluation_results,
+    improvement,
+    improvement_history,
+    log_collection,
+    task_review,
+    testdata,
+)
 
 st.set_page_config(
     page_title="Laimory 생성형 AI 평가",
@@ -49,6 +57,12 @@ _PAGES = [
     st.Page(task_review.render, title="Task 리뷰·채점", icon="🔍", url_path="task-review"),
     st.Page(evaluation_results.render, title="채점 결과", icon="📋", url_path="evaluation-results"),
     st.Page(improvement.render, title="개선책", icon="🛠", url_path="improvement"),
+    st.Page(
+        improvement_history.render,
+        title="개선 history",
+        icon="📈",
+        url_path="improvement-history",
+    ),
     st.Page(testdata.render, title="테스트 데이터", icon="🧪", url_path="testdata"),
 ]
 
