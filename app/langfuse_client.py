@@ -45,9 +45,16 @@ def list_traces(
     user_id: str | None = None,
     from_timestamp: datetime | None = None,
     to_timestamp: datetime | None = None,
+    order_by: str | None = None,
+    fields: str | None = None,
     tags: Sequence[str] | None = None,
 ) -> Any:
-    """트레이스 목록(페이지 1건)을 조회한다. 반환은 SDK 의 ``Traces``(``.data`` / ``.meta``)."""
+    """트레이스 목록(페이지 1건)을 조회한다. 반환은 SDK 의 ``Traces``(``.data`` / ``.meta``).
+
+    ``order_by`` 는 ``"[field].[asc|desc]"`` 형식(예: ``"timestamp.asc"``). 생략하면 SDK 기본 정렬.
+    ``fields`` 는 응답에 담을 필드 그룹(``core``/``io``/``scores``/``observations``/``metrics``)을
+    콤마로 나열한다. 생략하면 전부 받는다(트레이스당 관측치까지 실려 목록 조회가 느려진다).
+    """
     client = get_client()
     return client.api.trace.list(
         page=page,
@@ -56,6 +63,8 @@ def list_traces(
         user_id=user_id or None,
         from_timestamp=from_timestamp,
         to_timestamp=to_timestamp,
+        order_by=order_by or None,
+        fields=fields or None,
         tags=list(tags) if tags else None,
     )
 

@@ -24,8 +24,13 @@ def data_root() -> Path:
 
 
 def collection_file() -> Path:
-    """대시보드용 수집 스냅샷(트레이스 요약 목록). 집계의 원천."""
+    """누적 수집된 트레이스 요약 목록. 집계의 원천이며 교체가 아니라 병합으로 쌓인다."""
     return data_root() / "collection.json"
+
+
+def collection_state_file() -> Path:
+    """증분 동기화 커서(연속으로 훑은 구간의 끝·마지막 동기화 시각·저장 건수)."""
+    return data_root() / "collection.state.json"
 
 
 def tasks_dir() -> Path:
