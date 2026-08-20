@@ -12,8 +12,8 @@ from typing import Any
 
 from openai import OpenAI
 
-from app.analysis.rubric import SYSTEM_PROMPT, _as_text, build_user_prompt
-from app.analysis.schema import CRITERION_KEYS, TraceScorecard
+from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
+from app.analysis.schema import CRITERION_KEYS, METRIC_KEYS, TraceScorecard
 from app.config import get_settings
 
 
@@ -37,11 +37,11 @@ _TIMELINE_OBS_PRIORITY = ("main-agent", "question-agent", "store-timeline")
 
 
 def _observation_timeline(observation: Any) -> Any:
-    """관측치 output 에서 events 를 가진 timeline dict 를 꺼낸다. 없으면 None."""
+    """관측치 output 에서 events 배열을 가진 timeline dict 를 꺼낸다. 없으면 None."""
     out = getattr(observation, "output", None)
     if isinstance(out, dict):
         timeline = out.get("timeline")
-        if isinstance(timeline, dict) and timeline.get("events"):
+        if isinstance(timeline, dict) and isinstance(timeline.get("events"), list):
             return timeline
     return None
 
@@ -67,6 +67,38 @@ def find_final_timeline(trace_detail: Any) -> Any:
     return None
 
 
+_SOURCE_KEYS = (
+    "date",
+    "timezone",
+    "userMemory",
+    "stays",
+    "movements",
+    "calendars",
+    "notifications",
+    "photos",
+    "healths",
+)
+
+
+def _canonical_input(trace_detail: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """중복된 trace.input에서 task 식별자와 source 정본만 분리한다."""
+    raw = getattr(trace_detail, "input", None)
+    if not isinstance(raw, dict):
+        return {"rawInputType": type(raw).__name__}, {"raw": raw}
+
+    request = raw.get("request") if isinstance(raw.get("request"), dict) else {}
+    task = {
+        "taskId": raw.get("taskId") or request.get("taskId"),
+        "dailyRecordId": raw.get("dailyRecordId") or request.get("dailyRecordId"),
+        "window": raw.get("window") or request.get("window"),
+    }
+    source = {
+        key: request.get(key) if key in {"date", "timezone", "userMemory"} else request.get(key) or []
+        for key in _SOURCE_KEYS
+    }
+    return task, source
+
+
 def assemble_evidence(trace_detail: Any) -> dict:
     """트레이스 상세 → judge 근거 dict(이름·입력·최종 타임라인·관측치 요약).
 
@@ -81,24 +113,26 @@ def assemble_evidence(trace_detail: Any) -> dict:
         }
         for o in observations
     ]
+    task, source = _canonical_input(trace_detail)
     timeline = find_final_timeline(trace_detail)
     if timeline is not None:
-        output_text = _as_text(timeline, limit=40000)
+        output = timeline
         output_source = "관측치 최종 타임라인(events)"
     else:
-        output_text = _as_text(getattr(trace_detail, "output", None))
+        output = getattr(trace_detail, "output", None)
         output_source = "trace.output 폴백 — 최종 타임라인을 못 찾음(불완전 근거)"
     return {
         "name": getattr(trace_detail, "name", None),
-        "input": _as_text(getattr(trace_detail, "input", None)),
-        "output": output_text,
+        "task": task,
+        "source": source,
+        "output": output,
         "output_source": output_source,
         "observations": obs_brief,
     }
 
 
 def _clamp_scores(card: TraceScorecard) -> TraceScorecard:
-    """혹시 모델이 0~10 밖을 내면 잘라 맞춘다(스키마엔 범위 제약을 두지 않으므로)."""
+    """모델의 점수·Metric을 v4 범위와 null 규칙에 맞춘다."""
     def clamp(value: int) -> int:
         return max(0, min(10, value))
 
@@ -106,6 +140,27 @@ def _clamp_scores(card: TraceScorecard) -> TraceScorecard:
         item = getattr(card.scores, key)
         item.score = clamp(item.score)
     card.overall.score = clamp(card.overall.score)
+
+    for key in METRIC_KEYS:
+        metric = getattr(card.metrics, key)
+        if metric.denominator is None or metric.denominator <= 0:
+            metric.value = None
+            metric.numerator = None
+            metric.denominator = None
+            if "계산 대상" not in metric.reason and "분모" not in metric.reason:
+                metric.reason = f"{metric.reason.rstrip()} 계산 대상 또는 유효한 분모가 없어 null이다."
+            continue
+        if metric.numerator is not None:
+            metric.numerator = max(0.0, metric.numerator)
+        metric.denominator = max(0.0, metric.denominator)
+        if metric.value is None:
+            continue
+        if key == "meanTemporalIoU":
+            metric.value = round(max(0.0, min(1.0, metric.value)), 3)
+        elif key == "meanBoundaryErrorMinutes":
+            metric.value = round(max(0.0, metric.value), 1)
+        else:
+            metric.value = round(max(0.0, min(100.0, metric.value)), 1)
     return card
 
 
@@ -113,7 +168,7 @@ def score_trace(trace_detail: Any, *, system_prompt: str | None = None) -> Trace
     """트레이스 하나를 채점해 TraceScorecard 를 돌려준다.
 
     `system_prompt` 를 주면 그 채점 기준으로 채점한다(UI 편집본). 없으면 기본 rubric.
-    점수 항목(6기준+전반)은 스키마가 고정하므로 기준을 바꿔도 구조는 유지된다.
+    점수 항목(7기준+전반)과 v3 Metric 20개는 스키마가 고정하므로 기준을 바꿔도 구조는 유지된다.
     """
     client = get_openai_client()
     model = get_settings().openai_judge_model

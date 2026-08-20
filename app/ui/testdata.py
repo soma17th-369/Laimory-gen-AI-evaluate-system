@@ -85,7 +85,7 @@ def _tab_from_logs() -> None:
     st.caption("수집된 트레이스의 실제 input 을 추출해 테스트 실행용 데이터로 저장합니다.")
     rows = store.load_json(collection_file()) or []
     if not rows:
-        st.info("먼저 **대시보드**에서 로그를 수집하세요.")
+        st.info("먼저 **LangFuse 로그 수집** 페이지에서 로그를 수집하세요.")
         return
     options = {r["id"]: r for r in rows if r.get("id")}
     picked = st.multiselect(

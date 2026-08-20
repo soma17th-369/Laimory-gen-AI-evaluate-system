@@ -44,6 +44,20 @@ def task_prompts_file(task_id: str) -> Path:
     return task_dir(task_id) / "prompts.json"
 
 
+def prompts_dir() -> Path:
+    """편집 가능한 프롬프트의 버전 레지스트리 루트."""
+    return data_root() / "prompts"
+
+
+def prompt_dir(name: str) -> Path:
+    """이름별 버전 폴더. 예: data/prompts/judge-rubric/."""
+    return prompts_dir() / _safe(name)
+
+
+def prompt_version_file(name: str, version: int) -> Path:
+    return prompt_dir(name) / f"v{int(version)}.json"
+
+
 def evaluations_dir() -> Path:
     return data_root() / "evaluations"
 

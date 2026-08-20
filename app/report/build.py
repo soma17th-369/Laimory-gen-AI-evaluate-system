@@ -8,7 +8,7 @@ from statistics import mean
 from app.analysis.schema import CRITERION_KEYS
 from app.report.schema import Report, ReportItem, ReportSummary
 
-_SEVERITIES = ("HIGH", "MED", "LOW")
+_SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 
 
 def _summarize(items: list[ReportItem]) -> ReportSummary:
