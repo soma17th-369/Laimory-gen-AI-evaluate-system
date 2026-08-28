@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 
-from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS
+from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
 from app.report.schema import Report
 
-_SEVERITIES = ("HIGH", "MED", "LOW")
+_SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 
 
 def report_to_json(report: Report) -> str:
@@ -65,6 +65,20 @@ def report_to_markdown(report: Report) -> str:
         lines.append(
             f"| {CRITERION_LABELS['overall']} | {card.overall.score}/10 | {_cell(card.overall.reason)} |"
         )
+        lines += [
+            "",
+            "정량 Metric:",
+            "",
+            "| Metric | 값 | 분자 | 분모 | 근거 |",
+            "| --- | ---: | ---: | ---: | --- |",
+        ]
+        for key in METRIC_KEYS:
+            metric = getattr(card.metrics, key)
+            lines.append(
+                f"| {METRIC_LABELS[key]} | {metric.value if metric.value is not None else '-'} | "
+                f"{metric.numerator if metric.numerator is not None else '-'} | "
+                f"{metric.denominator if metric.denominator is not None else '-'} | {_cell(metric.reason)} |"
+            )
         if card.findings:
             lines += ["", "문제점:"]
             for finding in card.findings:

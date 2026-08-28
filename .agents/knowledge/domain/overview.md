@@ -27,7 +27,10 @@ Laimory 의 생성형 AI가 남긴 실행 로그를 분석해 **품질을 측정
 - **확정**: GUI 는 Streamlit(로컬 브라우저 실행), LangFuse 접근은 공식 Python SDK(`langfuse` v4).
   진입점은 `app/main.py`, 코드는 `app/` 패키지.
 - **잠정**: 분석·채점·생성에 쓰는 LLM provider 는 **OpenAI**(사용자 잠정 결정, 확정 아님).
-- **미정**: 점수 기준(rubric·척도), 리포트 형식, 테스트 데이터 스키마. 정해지면 이 문서와
-  [공통 언어](ubiquitous-language.md) 를 갱신한다.
+- **확정**: 하루 타임라인 채점은 `judge-rubric` v4를 사용한다. grounding·temporal·place·
+  coverage·composition·writing·question의 7개 기준과 overall을 0~10으로 평가하며, 점수 전에
+  AI 서버 v3가 정의한 20개 정량 Metric을 계산한다. v4는 v2 전체 기준과 v3 Metric 원본을
+  합성한 버전이다.
+- **미정**: 테스트 데이터 스키마의 최종 형태.
 - 실제 secret·token(LangFuse 키·OpenAI 키 등)·사용자 원문·프롬프트 원문은 문서·운영 로그·
   저장소에 남기지 않는다.

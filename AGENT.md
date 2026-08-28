@@ -86,6 +86,10 @@ $env:UV_CACHE_DIR=".uv-cache"
 uv run streamlit run app/main.py
 ```
 
+매번 터미널을 열기 번거로우면 `scripts/run-app.cmd` 를 더블클릭합니다(바탕화면 바로가기 가능).
+앱을 headless 로 띄운 뒤 포트가 열리면 스크립트가 브라우저를 엽니다. headless 가 아니면 첫 실행
+때 streamlit 의 이메일 입력 프롬프트에서 멈추므로 그대로 두어야 합니다. 창을 닫으면 종료됩니다.
+
 - LangFuse 접근은 공식 Python SDK(`langfuse`)를 사용합니다. 키(public/secret)와 host 는
   환경변수(`.env`)로 주입하고, **키·로그 본문·프롬프트 원문은 저장소·운영 로그에 남기지
   않습니다.**

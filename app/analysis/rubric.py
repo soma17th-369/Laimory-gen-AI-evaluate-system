@@ -9,7 +9,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-SYSTEM_PROMPT = """\
+from app.prompts import registry
+
+RUBRIC_NAME = "judge-rubric"
+RUBRIC_VERSION = 4
+
+_FALLBACK_SYSTEM_PROMPT = """\
 당신은 생성형 AI 가 만든 '하루 타임라인'의 품질을 평가하는 엄정한 채점자다.
 대상 AI 는 사용자의 하루 수집 데이터(위치·캘린더·건강·사진·알림 등)를 받아, 하루를
 event 들의 타임라인으로 만들고 각 event 에 회고 질문을 붙인다.
@@ -22,9 +27,10 @@ event 들의 타임라인으로 만들고 각 event 에 회고 질문을 붙인�
 2. temporal(시간 정합성): event 시각·순서가 요청 기간(window)·수면 경계·근거 구간과 모순 없는가.
 3. place(장소 정합성): 장소/주소가 근거에 있고 잘못 붙지 않았는가.
 4. coverage(완결성): 주요 활동·캘린더 일정 누락 없이 하루가 설명되는가.
-5. writing(문장 품질): title·description 이 1인칭 해요체 과거형이고, 추정 표현(예: '듯해요')과
+5. composition(사건 구성): 사건의 병합·분할·지속시간과 하루 서사가 자연스러운가.
+6. writing(문장 품질): title·description 이 1인칭 해요체 과거형이고, 추정 표현(예: '듯해요')과
    원시 수치(분 단위 시각·걸음 수)를 문장에 쓰지 않으며, 길이가 적정한가.
-6. question(회고 질문): 모든 event 에 해요체 의문문·40자 내외의 회고 질문이 하나씩 붙었는가.
+7. question(회고 질문): 모든 event 에 해요체 의문문·40자 내외의 회고 질문이 하나씩 붙었는가.
 
 채점 규칙:
 - 오직 주어진 근거(입력·최종 출력)에만 근거해 판단한다. 근거에 없는 사실을 지어내지 않는다.
@@ -35,8 +41,21 @@ event 들의 타임라인으로 만들고 각 event 에 회고 질문을 붙인�
 """
 
 
-def _as_text(value: Any, limit: int = 20000) -> str:
-    """근거 값을 프롬프트용 텍스트로. dict/list 는 JSON 직렬화, 과도하면 자른다."""
+def _registered_system_prompt() -> str:
+    """AI 서버 v3 원본을 포함하는 합성 v4를 기본 rubric으로 불러온다."""
+    try:
+        record = registry.get(RUBRIC_NAME, RUBRIC_VERSION)
+    except (OSError, TypeError, ValueError):
+        record = None
+    content = record.get("content") if record else None
+    return content if isinstance(content, str) and content.strip() else _FALLBACK_SYSTEM_PROMPT
+
+
+SYSTEM_PROMPT = _registered_system_prompt()
+
+
+def _as_text(value: Any, limit: int | None = 20000) -> str:
+    """근거 값을 프롬프트용 텍스트로. ``limit=None``이면 원문을 생략하지 않는다."""
     if value is None:
         return "(없음)"
     if isinstance(value, str):
@@ -46,7 +65,7 @@ def _as_text(value: Any, limit: int = 20000) -> str:
             text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
         except (TypeError, ValueError):
             text = str(value)
-    if len(text) > limit:
+    if limit is not None and len(text) > limit:
         text = text[:limit] + f"\n…(생략: 총 {len(text)}자)"
     return text
 
@@ -64,10 +83,13 @@ def build_user_prompt(evidence: dict) -> str:
     obs_lines = "\n".join(f"- [{o.get('type')}] {o.get('name')}" for o in obs) or "(없음)"
     return (
         f"트레이스 이름: {evidence.get('name')}\n\n"
-        f"[입력 근거 — 수집 스냅샷]\n{evidence.get('input')}\n\n"
+        f"[Task — 식별·평가 window]\n{_as_text(evidence.get('task'), limit=None)}\n\n"
+        f"[입력 근거 — canonical source 전체]\n{_as_text(evidence.get('source'), limit=None)}\n\n"
         f"[최종 출력 — 타임라인 events · 출처: {evidence.get('output_source')}]\n"
-        f"{_EVENT_FIELD_HINT}\n{evidence.get('output')}\n\n"
+        f"{_EVENT_FIELD_HINT}\n{_as_text(evidence.get('output'), limit=None)}\n\n"
         f"[관측치 목록(참고)]\n{obs_lines}\n\n"
-        "위 근거로 7개 기준을 채점하고 문제점을 정리하라. "
-        "채점 대상은 최종 타임라인 events 이고, 입력 스냅샷은 근거 대조용이다."
+        "위 근거로 v3의 20개 Metric을 먼저 계산한 뒤 7개 기준과 overall을 채점하고 "
+        "문제점을 정리하라. 채점 대상은 최종 timeline 전체(events·questions·warnings)이며, "
+        "canonical source는 근거 대조와 Metric 분모 계산에 사용한다. 관측치 목록은 실행 출처 "
+        "확인용일 뿐 사건 근거로 사용하지 않는다."
     )

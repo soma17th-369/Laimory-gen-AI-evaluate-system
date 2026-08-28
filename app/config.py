@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_judge_model: str = "gpt-4o"
 
+    # 파일 저장 루트(로그·평가·개선책·테스트데이터). 프로젝트 루트 기준 상대경로. gitignore 대상.
+    data_dir: str = "data"
+
     def has_langfuse_credentials(self) -> bool:
         """public/secret 키가 모두 설정됐는지."""
         return self.langfuse_public_key is not None and self.langfuse_secret_key is not None

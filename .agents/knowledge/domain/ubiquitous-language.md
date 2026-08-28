@@ -18,11 +18,13 @@
 | 트레이스 | Trace | LangFuse 에서 한 번의 실행 흐름 단위. |
 | 생성 로그 | Generation | 트레이스 안의 LLM 호출 단위 로그(입력 프롬프트·출력·토큰 등). |
 | 분석 | Analysis | 로그를 읽어 생성형 AI 의 동작 과정을 파악하는 단계. |
-| 점수 | Score | 대상 실행의 품질을 나타내는 수치. |
+| 채점 기준 | Rubric | judge가 타임라인을 평가하는 규칙. 현재 `judge-rubric` v4는 7개 기준·overall과 v3 정량 Metric을 함께 사용한다. |
+| 정량 Metric | Quantitative Metric | 점수 전에 입력 source와 최종 timeline을 대조해 계산하는 수치. 값·분자·분모·근거를 저장하며 계산 대상이 없으면 null이다. |
+| 점수 | Score | grounding·temporal·place·coverage·composition·writing·question과 overall을 나타내는 0~10 정수. Metric을 핵심 근거로 삼되 단순 비율 환산은 하지 않는다. |
 | 문제점 | Finding | 분석에서 식별한 품질 문제 하나. |
 | 리포트 | Report | 분석·점수·문제점을 모은 산출물. 프롬프트 개선·테스트 데이터 생성의 근거. |
 | 프롬프트 개선 | Prompt improvement | 리포트를 근거로 도출한 프롬프트 수정 방향. |
 | 테스트 데이터 | Test data | 리포트를 바탕으로 생성한 검증용 입력·기대값. |
 
 > 위 용어는 [시스템 개요](overview.md) 의 파이프라인과 짝을 이룹니다. 세부 필드·코드 표기,
-> 점수의 정의(척도·범위)는 아직 미정이며, 설계·코드로 확정될 때 이 표에 병기합니다.
+> 세부 필드와 코드 식별자는 실제 스키마를 정본으로 봅니다.
