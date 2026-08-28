@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from app import environments
 from app.analysis.judge import get_openai_client
 from app.config import get_settings
 from app.langfuse_client import get_trace
@@ -91,7 +92,10 @@ def _tab_from_logs() -> None:
     picked = st.multiselect(
         "input 을 추출할 트레이스",
         options=list(options.keys()),
-        format_func=lambda i: f"{options[i].get('name')} · {str(i)[:8]}",
+        format_func=lambda i: (
+            f"[{environments.short_label(environments.of(options[i]))}] "
+            f"{options[i].get('name')} · {str(i)[:8]}"
+        ),
     )
     slug = st.text_input("저장 이름", value="from-logs", key="td_log_slug")
     if st.button("input 추출·저장", type="primary", disabled=not picked, key="td_log_btn"):
@@ -99,8 +103,16 @@ def _tab_from_logs() -> None:
             inputs = []
             with st.spinner("추출 중…"):
                 for trace_id in picked:
-                    detail = get_trace(trace_id)
-                    inputs.append({"traceId": trace_id, "input": getattr(detail, "input", None)})
+                    # 상세 조회는 그 트레이스가 있는 프로젝트로 보내야 한다.
+                    env = environments.of(options[trace_id])
+                    detail = get_trace(trace_id, env)
+                    inputs.append(
+                        {
+                            "traceId": trace_id,
+                            "env": env,
+                            "input": getattr(detail, "input", None),
+                        }
+                    )
             store.save_json(testdata_file("from-logs", slug), {"slug": slug, "inputs": inputs})
             st.session_state["td_log_count"] = len(inputs)
             st.toast(f"저장: testdata/from-logs/{slug}.json")

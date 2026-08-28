@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
+from app import environments
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS
 from app.collect.sync import parse_timestamp
 
@@ -279,6 +280,7 @@ def result_rows(
         out.append(
             {
                 "시각": row.get("timestamp"),
+                "환경": environments.short_label(environments.of(row)),
                 "이름": row.get("name"),
                 "모델": ", ".join(str(m) for m in models) if models else None,
                 "토큰": meta.get("totalTokens"),

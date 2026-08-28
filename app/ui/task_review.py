@@ -3,6 +3,10 @@
 처리과정(steps)·최종 타임라인(result)·프롬프트(generations)를 명세 구조로 보여주고,
 `data/tasks/<taskId>/trace.json` 에 저장한다(프롬프트는 §14 권고대로 trace.json 통합).
 채점 결과는 `data/evaluations/<taskId>.json`.
+
+목록은 개발·운영 로그를 합쳐 보여준다(→ [app.environments][]). 상세 조회는 **그 행이 온
+프로젝트로** 보내야 하므로, 선택한 행의 `env` 를 그대로 따라간다. 채점 결과에도 같은 값을 남겨
+어느 프로젝트의 task 를 잰 것인지 나중에 알 수 있게 한다.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app import environments
 from app.analysis.judge import assemble_evidence, score_trace
 from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
@@ -90,7 +95,14 @@ def _render_scorecard(card: Any) -> None:
         )
 
 
-def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str, note: str = "") -> None:
+def _judge_and_save(
+    trace_id: str,
+    task_id: str,
+    detail: Any,
+    system_prompt: str,
+    env: str,
+    note: str = "",
+) -> None:
     try:
         # 채점에 쓴 기준을 버전으로 확정(같은 본문이면 기존 버전 재사용).
         version = registry.get_or_create(RUBRIC_NAME, system_prompt, note=note, source="judge")
@@ -110,6 +122,7 @@ def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str
             {
                 "taskId": task_id,
                 "traceId": trace_id,
+                "env": env,  # 어느 LangFuse 프로젝트의 task 를 잰 것인지
                 "name": getattr(detail, "name", None),
                 "rubricRef": {"name": version["name"], "version": version["version"]},  # 채점 기준 버전
                 "systemPrompt": system_prompt,  # 재현용 본문(해당 버전과 동일)
@@ -125,7 +138,7 @@ def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str
         st.error(f"채점 실패: {type(exc).__name__}: {exc}")
 
 
-def _render_scoring(selected: str, task_id: str, detail: Any) -> None:
+def _render_scoring(selected: str, task_id: str, detail: Any, env: str) -> None:
     st.subheader("채점")
 
     versions = registry.list_versions(RUBRIC_NAME)
@@ -171,7 +184,7 @@ def _render_scoring(selected: str, task_id: str, detail: Any) -> None:
 
     can_judge = get_settings().has_openai_credentials()
     if judge_col.button("이 task 채점", type="primary", disabled=not can_judge, key=f"judge_{selected}", width="stretch"):
-        _judge_and_save(selected, task_id, detail, system_prompt, note=note)
+        _judge_and_save(selected, task_id, detail, system_prompt, env, note=note)
     if not can_judge:
         st.caption("채점하려면 .env 에 OPENAI_API_KEY 설정이 필요합니다.")
 
@@ -246,7 +259,9 @@ def _render_process(tj: dict) -> None:
 
 def render() -> None:
     st.title("🔍 Task 리뷰·채점")
-    st.caption("LangFuse 로그 수집 페이지에서 만든 공용 로그를 taskId별로 검토하고 채점합니다.")
+    st.caption(
+        "LangFuse 로그 수집 페이지에서 만든 공용 로그(개발·운영 합계)를 taskId별로 검토하고 채점합니다."
+    )
 
     traces = store.load_json(collection_file()) or []
     if not traces:
@@ -271,13 +286,14 @@ def render() -> None:
         selected = trace_options[0]
         st.caption(
             f"트레이스: {id_to_summary[selected].get('name') or '(이름없음)'} · "
-            f"`{selected}`"
+            f"`{selected}` · {environments.label(environments.of(id_to_summary[selected]))}"
         )
     else:
         selected = st.selectbox(
             "해당 task의 트레이스",
             options=trace_options,
             format_func=lambda trace_id: (
+                f"[{environments.short_label(environments.of(id_to_summary[trace_id]))}] "
                 f"{id_to_summary[trace_id].get('name') or '(이름없음)'} · {trace_id[:8]}"
             ),
             help="하나의 taskId에 여러 Langfuse 트레이스가 있으면 채점할 트레이스를 선택하세요.",
@@ -285,11 +301,14 @@ def render() -> None:
     if not selected:
         return
 
+    # 상세 조회는 그 트레이스가 있는 프로젝트로 보내야 한다.
+    env = environments.of(id_to_summary[selected])
+
     detail_cache = st.session_state.setdefault("tr_detail", {})
     if selected not in detail_cache:
         try:
-            with st.spinner("상세 조회 중…"):
-                detail_cache[selected] = get_trace(selected)
+            with st.spinner(f"상세 조회 중… ({environments.label(env)})"):
+                detail_cache[selected] = get_trace(selected, env)
         except Exception as exc:  # noqa: BLE001
             st.error(f"상세 조회 실패: {type(exc).__name__}: {exc}")
             return
@@ -302,7 +321,10 @@ def render() -> None:
     tj = tj_cache[selected]
 
     st.divider()
-    st.markdown(f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`")
+    st.markdown(
+        f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`  ·  "
+        f"{environments.label(env)}"
+    )
     cols = st.columns(4)
     cols[0].metric("관측치", tj["langfuse"]["observationCount"])
     cols[1].metric("처리 단계", len(tj["process"]["steps"]))
@@ -315,4 +337,4 @@ def render() -> None:
 
     _render_process(tj)
 
-    _render_scoring(selected, task_id, detail)
+    _render_scoring(selected, task_id, detail, env)
