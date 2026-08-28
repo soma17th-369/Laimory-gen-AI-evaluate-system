@@ -1,4 +1,8 @@
-"""저장된 채점 결과와 입출력 데이터를 함께 비교하는 페이지."""
+"""저장된 채점 결과와 입출력 데이터를 함께 비교하는 페이지.
+
+개발·운영 채점 결과를 한 목록에 모아 보여준다(→ [app.environments][]). 어느 프로젝트의 task 를
+잰 것인지는 레코드의 `env` 가 들고 있다.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app import environments
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
 from app.storage import store
 from app.storage.paths import evaluations_dir, task_trace_file
@@ -92,6 +97,7 @@ def _overview_rows(records: list[tuple[Path, dict[str, Any]]]) -> list[dict[str,
         rows.append(
             {
                 "taskId": evaluation.get("taskId") or path.stem,
+                "env": environments.short_label(environments.of(evaluation)),
                 "name": evaluation.get("name"),
                 "종합 점수": _overall_score(evaluation),
                 "문제점": len(scorecard.get("findings") or []),
@@ -192,7 +198,9 @@ def _render_scorecard(scorecard: dict[str, Any]) -> None:
 def render() -> None:
     st.markdown(_TABLE_CSS, unsafe_allow_html=True)
     st.title("📋 채점 결과")
-    st.caption("저장된 task 채점 결과를 모아보고, 채점에 사용한 Input과 Output을 비교합니다.")
+    st.caption(
+        "저장된 task 채점 결과(개발·운영 합계)를 모아보고, 채점에 사용한 Input과 Output을 비교합니다."
+    )
 
     records = _load_evaluations()
     if not records:

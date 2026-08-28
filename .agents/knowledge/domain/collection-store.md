@@ -3,20 +3,29 @@
 ## Scope
 
 LangFuse 트레이스를 로컬에 **누적 저장**하는 규칙과 증분 동기화 계약. 대시보드·Task 리뷰·
-테스트 데이터 페이지가 공유하는 단일 원천이다.
+테스트 데이터 페이지가 공유하는 단일 원천이다. 여러 LangFuse 프로젝트(dev·prod)를 한 목록에
+합쳐 담는다(→ [LangFuse 환경](langfuse-environments.md)).
 
 ## 정본 파일
 
 | 파일 | 내용 | 불변식 |
 | --- | --- | --- |
 | `data/collection.json` | 지금까지 수집한 트레이스 요약 배열 | `id` 유일 · `timestamp` 내림차순(최신 먼저) · 한 번 들어온 행은 재수집으로 지워지지 않는다 |
-| `data/collection.state.json` | 동기화 커서 | `backfilled` · `last_timestamp`(연속 훑기의 끝) · `last_synced_at` · `total` |
+| `data/collection.state.json` | **환경별** 동기화 커서 (`{"dev": {…}, "prod": {…}}`) | 각 값은 `backfilled` · `last_timestamp`(연속 훑기의 끝) · `last_synced_at` · `total`(그 환경의 저장 행 수) |
 
-행 스키마(고정): `id` · `taskId` · `name` · `timestamp` · `user_id` · `latency` · `total_cost`.
-`taskId` 는 `trace.input` 에서만 나온다(LangFuse 서버측 필터 불가).
+행 스키마(고정): `id` · `env` · `taskId` · `name` · `timestamp` · `user_id` · `latency` ·
+`total_cost`. `taskId` 는 `trace.input` 에서만 나온다(LangFuse 서버측 필터 불가).
+`env` 는 이 행이 어느 LangFuse 프로젝트에서 왔는지이며, 화면이 개발/운영을 구분하는 **유일한**
+근거다. `env` 가 없는 행은 환경 구분이 생기기 전 데이터라 `dev` 로 읽는다.
 
 ## 동기화 계약
 
+- **합쳐 담기**: 저장 파일은 하나다. 환경으로 폴더를 나누지 않고 행의 `env` 로 구분하며,
+  정렬은 환경과 무관하게 `timestamp` 내림차순이다. 트레이스 id 가 전역 유일이라 `id` 병합이
+  그대로 성립한다.
+- **커서는 환경마다**: `sync(env)` 는 한 환경만 훑고 그 환경의 커서만 옮긴다. 다른 환경의 행도
+  커서도 건드리지 않는다. 커서를 하나로 합치면 두 프로젝트가 서로를 밀어내 양쪽 다 구멍이 난다.
+  환경 구분이 없던 시절의 평면 커서(`{"backfilled": …}`)는 `dev` 것으로 읽는다.
 - **누적**: 수집은 교체가 아니라 `id` 기준 병합이다. 같은 `id` 는 새로 받은 값으로 갱신하고,
   LangFuse 가 더 이상 돌려주지 않는 행도 저장소에는 남는다.
 - **커서**: `last_timestamp` 는 **연속으로 훑은 구간의 끝**이다. 이번 조회에서 실제로 받은 행의
@@ -34,9 +43,10 @@ LangFuse 트레이스를 로컬에 **누적 저장**하는 규칙과 증분 동�
 
 ## Related paths
 
-`app/collect/sync.py`(구현 정본) · `app/storage/paths.py`(경로) · `app/ui/log_collection.py`(UI) ·
+`app/collect/sync.py`(구현 정본) · `app/environments.py`(환경 키) · `app/storage/paths.py`(경로) ·
+`app/ui/log_collection.py`(UI) ·
 소비자: `app/ui/dashboard.py` · `app/ui/task_review.py` · `app/ui/testdata.py`
 
 ## Update when
 
-저장 파일·행 스키마·커서 의미·누적/병합 규칙·조회 정렬이 바뀔 때.
+저장 파일·행 스키마·커서 의미·누적/병합 규칙·조회 정렬·환경 표시 방식이 바뀔 때.

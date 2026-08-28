@@ -3,6 +3,14 @@
 처리과정(steps)·최종 타임라인(result)·프롬프트(generations)를 명세 구조로 보여주고,
 `data/tasks/<taskId>/trace.json` 에 저장한다(프롬프트는 §14 권고대로 trace.json 통합).
 채점 결과는 `data/evaluations/<taskId>.json`.
+
+목록은 개발·운영 로그를 합쳐 보여준다(→ [app.environments][]). 상세 조회는 **그 행이 온
+프로젝트로** 보내야 하므로, 선택한 행의 `env` 를 그대로 따라간다. 채점 결과에도 같은 값을 남겨
+어느 프로젝트의 task 를 잰 것인지 나중에 알 수 있게 한다.
+
+고르는 곳과 보는 곳을 나누지 않는다. **목록에서 행을 클릭하면 바로 그 아래에** 처리 과정과
+채점이 펼쳐진다(`st.dataframe` 의 행 선택). 선택은 표의 위치 index 로 오므로 화면에 넘긴 행
+목록과 같은 순서를 유지해야 한다.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from app import environments
 from app.analysis.judge import assemble_evidence, score_trace
 from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
@@ -34,19 +43,25 @@ def _domain_task_id(trace_detail: Any, trace_id: str) -> str:
     return trace_id
 
 
-def _task_trace_options(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
-    """공용 로그 스냅샷을 taskId 별로 묶는다."""
-    summaries: list[dict[str, Any]] = []
-    task_to_trace_ids: dict[str, list[str]] = {}
-    for row in rows:
-        if not isinstance(row, dict) or not row.get("id"):
-            continue
-        summary = dict(row)
-        trace_id = str(summary["id"])
-        task_id = str(summary.get("taskId") or trace_id)
-        summaries.append(summary)
-        task_to_trace_ids.setdefault(task_id, []).append(trace_id)
-    return summaries, task_to_trace_ids
+_COLUMN_ORDER = ("env", "timestamp", "name", "taskId", "latency", "total_cost", "user_id", "id")
+"""표에 보일 열 순서. 어느 환경·언제·무엇인지가 먼저 오게 한다."""
+
+_TABLE_HEIGHT = 360
+"""목록 높이(px). 선택한 행의 상세가 화면 안에서 바로 이어지도록 목록을 짧게 잡는다."""
+
+
+def _selectable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """표에 그대로 넘길 행 목록. 선택은 이 리스트의 위치로 돌아온다."""
+    return [dict(row) for row in rows if isinstance(row, dict) and row.get("id")]
+
+
+def _picked_row(rows: list[dict[str, Any]], selection: Any) -> dict[str, Any] | None:
+    """표 선택 결과에서 행 하나를 꺼낸다. 아무것도 안 골랐으면 None."""
+    positions = list(getattr(selection, "rows", None) or [])
+    if not positions:
+        return None
+    index = int(positions[0])
+    return rows[index] if 0 <= index < len(rows) else None
 
 
 def _render_scorecard(card: Any) -> None:
@@ -90,7 +105,14 @@ def _render_scorecard(card: Any) -> None:
         )
 
 
-def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str, note: str = "") -> None:
+def _judge_and_save(
+    trace_id: str,
+    task_id: str,
+    detail: Any,
+    system_prompt: str,
+    env: str,
+    note: str = "",
+) -> None:
     try:
         # 채점에 쓴 기준을 버전으로 확정(같은 본문이면 기존 버전 재사용).
         version = registry.get_or_create(RUBRIC_NAME, system_prompt, note=note, source="judge")
@@ -110,6 +132,7 @@ def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str
             {
                 "taskId": task_id,
                 "traceId": trace_id,
+                "env": env,  # 어느 LangFuse 프로젝트의 task 를 잰 것인지
                 "name": getattr(detail, "name", None),
                 "rubricRef": {"name": version["name"], "version": version["version"]},  # 채점 기준 버전
                 "systemPrompt": system_prompt,  # 재현용 본문(해당 버전과 동일)
@@ -125,7 +148,7 @@ def _judge_and_save(trace_id: str, task_id: str, detail: Any, system_prompt: str
         st.error(f"채점 실패: {type(exc).__name__}: {exc}")
 
 
-def _render_scoring(selected: str, task_id: str, detail: Any) -> None:
+def _render_scoring(selected: str, task_id: str, detail: Any, env: str) -> None:
     st.subheader("채점")
 
     versions = registry.list_versions(RUBRIC_NAME)
@@ -171,7 +194,7 @@ def _render_scoring(selected: str, task_id: str, detail: Any) -> None:
 
     can_judge = get_settings().has_openai_credentials()
     if judge_col.button("이 task 채점", type="primary", disabled=not can_judge, key=f"judge_{selected}", width="stretch"):
-        _judge_and_save(selected, task_id, detail, system_prompt, note=note)
+        _judge_and_save(selected, task_id, detail, system_prompt, env, note=note)
     if not can_judge:
         st.caption("채점하려면 .env 에 OPENAI_API_KEY 설정이 필요합니다.")
 
@@ -246,50 +269,47 @@ def _render_process(tj: dict) -> None:
 
 def render() -> None:
     st.title("🔍 Task 리뷰·채점")
-    st.caption("LangFuse 로그 수집 페이지에서 만든 공용 로그를 taskId별로 검토하고 채점합니다.")
+    st.caption(
+        "LangFuse 로그 수집 페이지에서 만든 공용 로그(개발·운영 합계)를 검토하고 채점합니다. "
+        "목록에서 행을 클릭하면 바로 아래에 그 트레이스의 처리 과정과 채점이 나타납니다."
+    )
 
     traces = store.load_json(collection_file()) or []
     if not traces:
         st.info("먼저 **LangFuse 로그 수집** 페이지에서 로그를 수집하세요.")
         return
 
-    summaries, task_to_trace_ids = _task_trace_options(traces)
+    summaries = _selectable_rows(traces)
     if not summaries:
         st.warning("공용 로그에 사용할 수 있는 트레이스가 없습니다. 다시 수집하세요.")
         return
-    id_to_summary = {s["id"]: s for s in summaries}
-    st.dataframe(pd.DataFrame(summaries), width="stretch", hide_index=True)
 
-    selected_task_id = st.selectbox(
-        "채점할 taskId",
-        options=list(task_to_trace_ids.keys()),
-        format_func=lambda task_id: f"{task_id} · 트레이스 {len(task_to_trace_ids[task_id])}개",
-        help="Langfuse 트레이스 입력의 taskId를 기준으로 묶은 목록입니다.",
+    frame = pd.DataFrame(summaries)
+    event = st.dataframe(
+        frame,
+        width="stretch",
+        height=_TABLE_HEIGHT,
+        hide_index=True,
+        column_order=[column for column in _COLUMN_ORDER if column in frame.columns],
+        on_select="rerun",
+        selection_mode="single-row",
+        key="tr_table",
     )
-    trace_options = task_to_trace_ids[selected_task_id]
-    if len(trace_options) == 1:
-        selected = trace_options[0]
-        st.caption(
-            f"트레이스: {id_to_summary[selected].get('name') or '(이름없음)'} · "
-            f"`{selected}`"
-        )
-    else:
-        selected = st.selectbox(
-            "해당 task의 트레이스",
-            options=trace_options,
-            format_func=lambda trace_id: (
-                f"{id_to_summary[trace_id].get('name') or '(이름없음)'} · {trace_id[:8]}"
-            ),
-            help="하나의 taskId에 여러 Langfuse 트레이스가 있으면 채점할 트레이스를 선택하세요.",
-        )
-    if not selected:
+
+    summary = _picked_row(summaries, event.selection)
+    if summary is None:
+        st.info("위 목록에서 행을 클릭하면 여기에 처리 과정과 채점이 나타납니다.")
         return
+    selected = str(summary["id"])
+
+    # 상세 조회는 그 트레이스가 있는 프로젝트로 보내야 한다.
+    env = environments.of(summary)
 
     detail_cache = st.session_state.setdefault("tr_detail", {})
     if selected not in detail_cache:
         try:
-            with st.spinner("상세 조회 중…"):
-                detail_cache[selected] = get_trace(selected)
+            with st.spinner(f"상세 조회 중… ({environments.label(env)})"):
+                detail_cache[selected] = get_trace(selected, env)
         except Exception as exc:  # noqa: BLE001
             st.error(f"상세 조회 실패: {type(exc).__name__}: {exc}")
             return
@@ -302,7 +322,19 @@ def render() -> None:
     tj = tj_cache[selected]
 
     st.divider()
-    st.markdown(f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`")
+    st.markdown(
+        f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`  ·  "
+        f"{environments.label(env)}"
+    )
+    siblings = [
+        row for row in summaries if row.get("taskId") and str(row["taskId"]) == task_id
+    ]
+    if len(siblings) > 1:
+        st.caption(
+            f"같은 taskId 의 트레이스가 {len(siblings)}개 있습니다. 위 목록에서 taskId 로 검색해 "
+            "다른 트레이스도 볼 수 있습니다."
+        )
+
     cols = st.columns(4)
     cols[0].metric("관측치", tj["langfuse"]["observationCount"])
     cols[1].metric("처리 단계", len(tj["process"]["steps"]))
@@ -315,4 +347,4 @@ def render() -> None:
 
     _render_process(tj)
 
-    _render_scoring(selected, task_id, detail)
+    _render_scoring(selected, task_id, detail, env)

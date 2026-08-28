@@ -5,6 +5,9 @@
 
 모델과 토큰은 트레이스 목록에 없어서 필요할 때만 관측치를 조회해 채운다
 (→ [app.collect.generations][]). 조회하지 않은 행은 `-` 로 남는다.
+
+로그는 개발·운영을 합쳐 시간순으로 본다(→ [app.environments][]). 결과 표의 `환경` 열이 어느
+프로젝트에서 온 행인지 알려주고, 모델·토큰 조회는 각 행이 온 프로젝트로 보낸다.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from app import environments
 from app.collect import generations
 from app.collect import sync as collect
 from app.collect.sync import parse_timestamp
@@ -86,14 +90,17 @@ def _delta_table(deltas: list[compare.MetricDelta], previous_label: str) -> pd.D
     )
 
 
-def _fetch_models(slug: str, trace_ids: list[str]) -> None:
-    """표시 중인 결과 행의 모델·토큰을 조회해 캐시에 채운다(트레이스당 API 1회)."""
+def _fetch_models(slug: str, traces: list[tuple[str, str]]) -> None:
+    """표시 중인 결과 행의 모델·토큰을 조회해 캐시에 채운다(트레이스당 API 1회).
+
+    `traces` 는 `(traceId, env)` 쌍이다. 행마다 온 프로젝트가 달라서 조회도 그쪽으로 보낸다.
+    """
     try:
-        with st.status(f"모델·토큰 조회 중… (최대 {len(trace_ids)}건)", expanded=False) as status:
+        with st.status(f"모델·토큰 조회 중… (최대 {len(traces)}건)", expanded=False) as status:
             def on_progress(done: int, total: int) -> None:
                 status.update(label=f"모델·토큰 조회 중… {done}/{total}")
 
-            _, fetched = generations.fetch_missing(trace_ids, on_progress=on_progress)
+            _, fetched = generations.fetch_missing(traces, on_progress=on_progress)
             status.update(label=f"조회 완료 · 신규 {fetched}건", state="complete")
     except Exception as exc:  # noqa: BLE001
         st.error(f"조회 실패: {type(exc).__name__}: {exc}")
@@ -149,7 +156,12 @@ def _render_segment(
         st.info("이 구간에 수집된 로그가 없습니다.")
     else:
         st.dataframe(pd.DataFrame(listed), width="stretch", hide_index=True)
-        missing = [r["traceId"] for r in listed if not r.get("모델") and r.get("traceId")]
+        env_by_trace = {str(r.get("id")): environments.of(r) for r in after_rows if r.get("id")}
+        missing = [
+            (str(r["traceId"]), env_by_trace.get(str(r["traceId"]), environments.DEV))
+            for r in listed
+            if not r.get("모델") and r.get("traceId")
+        ]
         if missing:
             st.caption(f"모델·토큰이 비어 있는 행 {len(missing)}건. 조회하면 캐시에 저장돼 다음부터는 바로 보입니다.")
             if st.button(f"모델·토큰 조회 ({len(missing)}건)", key=f"hist_fetch_{slug}"):
@@ -169,7 +181,10 @@ def _render_segment(
 
 def render() -> None:
     st.title("📈 개선 history")
-    st.caption("반영된 개선책을 시간 순으로 놓고, 반영 이후 결과가 실제로 달라졌는지 확인합니다.")
+    st.caption(
+        "반영된 개선책을 시간 순으로 놓고, 반영 이후 결과가 실제로 달라졌는지 확인합니다. "
+        "개발·운영 로그를 합쳐 봅니다."
+    )
 
     rows = collect.load_rows()
     if not rows:
