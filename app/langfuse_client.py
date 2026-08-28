@@ -74,6 +74,31 @@ def get_trace(trace_id: str) -> Any:
     return get_client().api.trace.get(trace_id)
 
 
+def list_generations(
+    *,
+    trace_id: str | None = None,
+    from_start_time: datetime | None = None,
+    to_start_time: datetime | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+) -> Any:
+    """GENERATION 관측치 목록(모델·토큰). 반환은 ``.data`` / ``.meta.cursor``.
+
+    트레이스 목록 API 는 모델·토큰을 주지 않는다(``observations`` 가 id 목록뿐). 모델명과 토큰이
+    필요하면 이 함수로 관측치를 따로 조회한다. 커서 기반 페이지네이션이라 다음 페이지는
+    ``meta.cursor`` 를 그대로 넘긴다.
+    """
+    return get_client().api.observations.get_many(
+        trace_id=trace_id or None,
+        type="GENERATION",
+        fields="core,basic,model,usage",
+        from_start_time=from_start_time,
+        to_start_time=to_start_time,
+        limit=limit,
+        cursor=cursor or None,
+    )
+
+
 # --- UI 표시용 매핑 (SDK 모델 → 얇은 dict) -------------------------------------
 
 def trace_summary(trace: Any) -> dict[str, Any]:
