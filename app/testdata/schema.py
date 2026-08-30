@@ -2,7 +2,7 @@
 
 `input` 은 실제 수집 스냅샷의 **단순화 스키마**다(핵심 의미 필드만: 시각·장소·제목). rawId·좌표·
 transports 같은 세부는 회귀/판정용 케이스엔 불필요해 생략한다. `expected` 는 자연어 기대 조건.
-OpenAI structured output(strict) 이라 모든 필드가 required 이고 dict 자유형은 쓰지 않는다.
+strict structured output 계약이라 모든 필드가 required 이고 dict 자유형은 쓰지 않는다.
 """
 
 from __future__ import annotations

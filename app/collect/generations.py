@@ -19,6 +19,10 @@
 
 한 번 조회한 트레이스는 다시 조회하지 않는다. 트레이스는 끝난 뒤에는 바뀌지 않으므로 캐시를
 무효화할 일이 없다.
+
+캐시는 환경(dev·prod)을 가리지 않고 한 파일에 담는다. 트레이스 id 가 전역 유일이라 키가 부딪히지
+않는다. 다만 **조회할 때는 그 트레이스가 어느 프로젝트 것인지 알아야** 하므로, 호출부가
+`(traceId, env)` 쌍을 넘긴다(→ [app.environments][]).
 """
 
 from __future__ import annotations
@@ -68,7 +72,7 @@ def _model_name(observation: Any) -> str | None:
     return None
 
 
-def fetch_trace(trace_id: str) -> dict[str, Any]:
+def fetch_trace(trace_id: str, env: str) -> dict[str, Any]:
     """트레이스 하나의 GENERATION 관측치를 모아 롤업 한 건을 만든다."""
     models: list[str] = []
     generations = 0
@@ -77,7 +81,7 @@ def fetch_trace(trace_id: str) -> dict[str, Any]:
 
     cursor: str | None = None
     for _ in range(_MAX_PAGES):
-        response = list_generations(trace_id=trace_id, limit=_PAGE, cursor=cursor)
+        response = list_generations(trace_id=trace_id, limit=_PAGE, cursor=cursor, env=env)
         batch = getattr(response, "data", []) or []
         for observation in batch:
             generations += 1
@@ -106,22 +110,23 @@ def fetch_trace(trace_id: str) -> dict[str, Any]:
 
 
 def fetch_missing(
-    trace_ids: Iterable[str],
+    traces: Iterable[tuple[str, str]],
     *,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], int]:
     """아직 캐시에 없는 트레이스만 조회해 채운다. `(전체 캐시, 새로 채운 수)`.
 
+    `traces` 는 `(traceId, env)` 쌍이다. 조회는 그 트레이스가 있는 프로젝트로 보내야 한다.
     트레이스 하나당 API 호출 한 번이라 목록이 길면 그만큼 걸린다. 호출부가 조회 대상 수를
     제한해서 넘긴다.
     """
     rollup = load_rollup()
-    todo = [str(t) for t in trace_ids if t and str(t) not in rollup]
+    todo = [(str(t), env) for t, env in traces if t and str(t) not in rollup]
     if not todo:
         return rollup, 0
 
-    for index, trace_id in enumerate(todo, start=1):
-        rollup[trace_id] = fetch_trace(trace_id)
+    for index, (trace_id, env) in enumerate(todo, start=1):
+        rollup[trace_id] = fetch_trace(trace_id, env)
         if on_progress is not None:
             on_progress(index, len(todo))
 

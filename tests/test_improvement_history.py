@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from app import environments
 from app.collect import generations
 from app.improve import compare, records
 from app.storage import store
@@ -205,6 +206,16 @@ class ResultRowTests(unittest.TestCase):
         self.assertIsNone(listed[1]["모델"])
         self.assertEqual(listed[1]["종합점수"], 7)
 
+    def test_each_result_row_reports_the_project_it_came_from(self) -> None:
+        rows = [
+            dict(_row(1, trace_id="dev-1"), env="dev"),
+            dict(_row(2, trace_id="prod-1"), env="prod"),
+        ]
+
+        listed = compare.result_rows(rows, evaluations={}, rollup={})
+
+        self.assertEqual({r["traceId"]: r["환경"] for r in listed}, {"dev-1": "dev", "prod-1": "prod"})
+
     def test_limit_keeps_the_newest_rows(self) -> None:
         rows = [_row(i, trace_id=f"t{i}") for i in range(1, 6)]
 
@@ -228,7 +239,7 @@ class GenerationRollupTests(unittest.TestCase):
     def _fetch(self, observations: list[SimpleNamespace]) -> dict:
         response = SimpleNamespace(data=observations, meta=SimpleNamespace(cursor=None))
         with mock.patch.object(generations, "list_generations", return_value=response):
-            return generations.fetch_trace("trace-1")
+            return generations.fetch_trace("trace-1", environments.DEV)
 
     def test_readable_model_name_is_used_not_the_internal_uuid(self) -> None:
         result = self._fetch([self._observation(model="gpt-5.4-mini")])

@@ -1,16 +1,15 @@
 """프롬프트 개선 제안 (M4a).
 
 트레이스의 GENERATION 관측치에서 **실제 프롬프트**(messages)를 뽑아, 채점 결과의 문제점과
-대조해 단계별 수정안을 낸다. judge 와 같은 OpenAI 클라이언트·모델을 쓴다.
+대조해 단계별 수정안을 낸다. 모든 상위 LLM 기능과 같은 공통 provider를 쓴다.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from app.analysis.judge import get_openai_client
+from app.analysis.providers import get_llm_provider
 from app.analysis.schema import CRITERION_LABELS, TraceScorecard
-from app.config import get_settings
 from app.improve.schema import PromptReview
 
 _GENERATION = "GENERATION"
@@ -85,26 +84,8 @@ def suggest_prompt_improvements(trace_detail: Any, scorecard: TraceScorecard) ->
         f"{_prompts_text(prompts)}\n\n"
         "위 문제점을 줄이기 위한 단계별 프롬프트 수정안을 제안하라."
     )
-    client = get_openai_client()
-    model = get_settings().openai_judge_model
-
-    def _parse(**extra):
-        return client.chat.completions.parse(
-            model=model,
-            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
-            response_format=PromptReview,
-            **extra,
-        )
-
-    try:
-        completion = _parse(temperature=0)
-    except Exception as exc:  # noqa: BLE001
-        if "temperature" in str(exc).lower():
-            completion = _parse()
-        else:
-            raise
-
-    review = completion.choices[0].message.parsed
-    if review is None:
-        raise RuntimeError("모델이 구조화 결과를 반환하지 않았습니다.")
-    return review
+    return get_llm_provider().generate_structured(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user,
+        result_model=PromptReview,
+    )

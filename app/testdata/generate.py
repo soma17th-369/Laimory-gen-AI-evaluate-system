@@ -1,14 +1,13 @@
 """테스트 케이스 생성 (M4b).
 
-리포트 문제점을 재현·검증하는 {입력 + 기대 조건} 케이스를 만든다. judge 와 같은 OpenAI
-클라이언트·모델을 쓰고, 결과는 json 으로 내보낼 수 있다(단순화 입력 스키마).
+리포트 문제점을 재현·검증하는 {입력 + 기대 조건} 케이스를 만든다. 공통 LLM provider를 쓰고,
+결과는 json 으로 내보낼 수 있다(단순화 입력 스키마).
 """
 
 from __future__ import annotations
 
-from app.analysis.judge import get_openai_client
+from app.analysis.providers import get_llm_provider
 from app.analysis.schema import CRITERION_LABELS, TraceScorecard
-from app.config import get_settings
 from app.testdata.schema import TestSuite
 
 _SYSTEM_PROMPT = """\
@@ -43,29 +42,11 @@ def generate_test_cases(scorecard: TraceScorecard) -> TestSuite:
         f"{_findings_text(scorecard)}\n\n"
         "위 문제를 재현·검증하는 테스트 케이스(입력 + 기대 조건)를 만들어라."
     )
-    client = get_openai_client()
-    model = get_settings().openai_judge_model
-
-    def _parse(**extra):
-        return client.chat.completions.parse(
-            model=model,
-            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": user}],
-            response_format=TestSuite,
-            **extra,
-        )
-
-    try:
-        completion = _parse(temperature=0)
-    except Exception as exc:  # noqa: BLE001
-        if "temperature" in str(exc).lower():
-            completion = _parse()
-        else:
-            raise
-
-    suite = completion.choices[0].message.parsed
-    if suite is None:
-        raise RuntimeError("모델이 구조화 결과를 반환하지 않았습니다.")
-    return suite
+    return get_llm_provider().generate_structured(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user,
+        result_model=TestSuite,
+    )
 
 
 def testsuite_to_json(suite: TestSuite) -> str:

@@ -1,35 +1,16 @@
 """LLM judge (M2).
 
-선택한 트레이스의 근거를 조립해 OpenAI structured output 으로 채점한다. 모델은 설정
-(`OPENAI_JUDGE_MODEL`, 기본 gpt-4o)에서 받아 언제든 교체 가능. 키는 SecretStr 로만 다루고
-값을 로그·화면에 남기지 않는다.
+선택한 트레이스의 근거를 조립해 설정된 Judge Provider로 채점한다. 기본 provider는 로컬에서
+ChatGPT 계정으로 인증된 Codex CLI이고 OpenAI API 직접 호출은 deprecated 선택지로 남긴다.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any
 
-from openai import OpenAI
-
+from app.analysis.providers import get_judge_provider
 from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
 from app.analysis.schema import CRITERION_KEYS, METRIC_KEYS, TraceScorecard
-from app.config import get_settings
-
-
-class OpenAINotConfigured(RuntimeError):
-    """OpenAI 키가 없어 채점할 수 없을 때."""
-
-
-@lru_cache
-def get_openai_client() -> OpenAI:
-    settings = get_settings()
-    if not settings.has_openai_credentials():
-        raise OpenAINotConfigured(
-            "OPENAI_API_KEY 가 없습니다. .env 에 설정하세요(.env.example 참고)."
-        )
-    # get_secret_value() 는 SDK 생성자에만 전달하고 저장·로깅하지 않는다.
-    return OpenAI(api_key=settings.openai_api_key.get_secret_value())
 
 
 # 최종 타임라인을 담는 관측치 이름 우선순위. main agent 그래프의 산출 위치(AGENT.md 참고).
@@ -170,31 +151,9 @@ def score_trace(trace_detail: Any, *, system_prompt: str | None = None) -> Trace
     `system_prompt` 를 주면 그 채점 기준으로 채점한다(UI 편집본). 없으면 기본 rubric.
     점수 항목(7기준+전반)과 v3 Metric 20개는 스키마가 고정하므로 기준을 바꿔도 구조는 유지된다.
     """
-    client = get_openai_client()
-    model = get_settings().openai_judge_model
-    messages = [
-        {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
-        {"role": "user", "content": build_user_prompt(assemble_evidence(trace_detail))},
-    ]
-
-    def _parse(**extra):
-        return client.chat.completions.parse(
-            model=model,
-            messages=messages,
-            response_format=TraceScorecard,
-            **extra,
-        )
-
-    try:
-        completion = _parse(temperature=0)
-    except Exception as exc:  # noqa: BLE001
-        # 일부 모델(o-series)은 temperature 조정을 막는다 → 빼고 재시도
-        if "temperature" in str(exc).lower():
-            completion = _parse()
-        else:
-            raise
-
-    card = completion.choices[0].message.parsed
-    if card is None:
-        raise RuntimeError("모델이 구조화 결과를 반환하지 않았습니다(거부 또는 형식 실패).")
+    card = get_judge_provider().evaluate(
+        system_prompt=system_prompt or SYSTEM_PROMPT,
+        user_prompt=build_user_prompt(assemble_evidence(trace_detail)),
+        result_model=TraceScorecard,
+    )
     return _clamp_scores(card)

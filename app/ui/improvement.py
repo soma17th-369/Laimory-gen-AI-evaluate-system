@@ -14,10 +14,14 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from app.analysis.judge import get_openai_client
+from app.analysis.providers import (
+    JudgeProviderError,
+    get_llm_provider,
+    llm_provider_label,
+    llm_setup_error,
+)
 from app.analysis.schema import CRITERION_LABELS
 from app.collect.sync import parse_timestamp
-from app.config import get_settings
 from app.improve import records
 from app.storage import store
 from app.storage.paths import evaluations_dir, improvement_file
@@ -52,23 +56,10 @@ def _findings_block(evaluations: list[dict]) -> str:
 
 
 def _generate(evaluations: list[dict], instruction: str) -> str:
-    client = get_openai_client()
-    model = get_settings().openai_judge_model
-    user = f"{instruction}\n\n[문제점 모음]\n{_findings_block(evaluations)}"
-
-    def call(**extra):
-        return client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": user}], **extra
-        )
-
-    try:
-        resp = call(temperature=0)
-    except Exception as exc:  # noqa: BLE001
-        if "temperature" in str(exc).lower():
-            resp = call()
-        else:
-            raise
-    return resp.choices[0].message.content or ""
+    return get_llm_provider().generate_text(
+        system_prompt=instruction,
+        user_prompt=f"[문제점 모음]\n{_findings_block(evaluations)}",
+    )
 
 
 def _fmt_time(value: str | None) -> str:
@@ -92,13 +83,14 @@ def _tab_generate() -> None:
     if records.load(slug) is not None:
         st.warning(f"같은 이름의 개선책이 이미 있습니다. 생성하면 덮어쓰고 상태는 '미반영'으로 돌아갑니다.")
 
-    if st.button("개선책 생성", type="primary", disabled=not get_settings().has_openai_credentials()):
+    setup_error = llm_setup_error()
+    if st.button("개선책 생성", type="primary", disabled=setup_error is not None):
         selected = [labels[k] for k in picked]
         if not selected:
             st.warning("task 를 하나 이상 선택하세요.")
         else:
             try:
-                with st.spinner("개선책 생성 중… (OpenAI)"):
+                with st.spinner(f"개선책 생성 중… ({llm_provider_label()})"):
                     text = _generate(selected, instruction)
                 store.save_json(
                     improvement_file(slug),
@@ -115,8 +107,14 @@ def _tab_generate() -> None:
                 )
                 st.session_state["improvement_text"] = text
                 st.toast(f"저장: improvements/{slug}.json")
+            except JudgeProviderError as exc:
+                st.error(f"생성 실패 [{exc.code}]: {exc}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"생성 실패: {type(exc).__name__}: {exc}")
+
+    st.caption(f"LLM Provider: {llm_provider_label()}")
+    if setup_error:
+        st.caption(setup_error)
 
     text = st.session_state.get("improvement_text")
     if text:

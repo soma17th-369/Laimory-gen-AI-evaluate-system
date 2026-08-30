@@ -19,6 +19,7 @@
 | 생성 로그 | Generation | 트레이스 안의 LLM 호출 단위 로그(입력 프롬프트·출력·토큰 등). |
 | 분석 | Analysis | 로그를 읽어 생성형 AI 의 동작 과정을 파악하는 단계. |
 | 채점 기준 | Rubric | judge가 타임라인을 평가하는 규칙. 현재 `judge-rubric` v4는 7개 기준·overall과 v3 정량 Metric을 함께 사용한다. |
+| LLM Provider | LLM Provider | 채점·프롬프트 개선·개선책·테스트 데이터 생성을 실행하는 공통 경계. 기본은 `CodexProvider`, deprecated 호환 구현은 `OpenAIApiProvider`다. 구조화 기능은 각 도메인의 Pydantic Schema를 쓴다. |
 | 정량 Metric | Quantitative Metric | 점수 전에 입력 source와 최종 timeline을 대조해 계산하는 수치. 값·분자·분모·근거를 저장하며 계산 대상이 없으면 null이다. |
 | 점수 | Score | grounding·temporal·place·coverage·composition·writing·question과 overall을 나타내는 0~10 정수. Metric을 핵심 근거로 삼되 단순 비율 환산은 하지 않는다. |
 | 문제점 | Finding | 분석에서 식별한 품질 문제 하나. |
