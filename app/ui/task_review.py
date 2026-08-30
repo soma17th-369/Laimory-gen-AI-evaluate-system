@@ -22,9 +22,13 @@ import streamlit as st
 
 from app import environments
 from app.analysis.judge import assemble_evidence, score_trace
+from app.analysis.providers import (
+    JudgeProviderError,
+    llm_provider_label,
+    llm_setup_error,
+)
 from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
 from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
-from app.config import get_settings
 from app.langfuse_client import get_trace
 from app.prompts import registry
 from app.storage import store
@@ -117,7 +121,7 @@ def _judge_and_save(
         # 채점에 쓴 기준을 버전으로 확정(같은 본문이면 기존 버전 재사용).
         version = registry.get_or_create(RUBRIC_NAME, system_prompt, note=note, source="judge")
         trace_json = build_trace_json(detail)
-        with st.spinner("채점 중… (OpenAI)"):
+        with st.spinner(f"채점 중… ({llm_provider_label()})"):
             card = score_trace(detail, system_prompt=system_prompt)
         st.session_state.setdefault("tr_cards", {})[trace_id] = card
         # 채점 결과 페이지에서 네트워크 재조회 없이 입출력을 비교할 수 있게 함께 저장한다.
@@ -144,6 +148,8 @@ def _judge_and_save(
         )
         st.session_state["tr_saved_path"] = path.as_posix()
         st.toast(f"평가 저장(기준 v{version['version']}): {path.as_posix()}")
+    except JudgeProviderError as exc:
+        st.error(f"채점 실패 [{exc.code}]: {exc}")
     except Exception as exc:  # noqa: BLE001
         st.error(f"채점 실패: {type(exc).__name__}: {exc}")
 
@@ -192,11 +198,13 @@ def _render_scoring(selected: str, task_id: str, detail: Any, env: str) -> None:
         else:
             st.toast(f"변경 없음 — 최신 v{rec['version']} 그대로")
 
-    can_judge = get_settings().has_openai_credentials()
+    setup_error = llm_setup_error()
+    can_judge = setup_error is None
     if judge_col.button("이 task 채점", type="primary", disabled=not can_judge, key=f"judge_{selected}", width="stretch"):
         _judge_and_save(selected, task_id, detail, system_prompt, env, note=note)
-    if not can_judge:
-        st.caption("채점하려면 .env 에 OPENAI_API_KEY 설정이 필요합니다.")
+    st.caption(f"LLM Provider: {llm_provider_label()}")
+    if setup_error:
+        st.caption(setup_error)
 
     with st.expander("채점 입력 프롬프트 (judge 에 들어가는 근거)"):
         st.code(build_user_prompt(assemble_evidence(detail)))

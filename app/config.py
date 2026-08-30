@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -69,7 +70,12 @@ class Settings(BaseSettings):
     langfuse_prod_secret_key: SecretStr | None = None
     langfuse_prod_host: str | None = None
 
-    # OpenAI (M2 채점/분석용). 키가 없으면 채점 기능만 비활성되고 조회는 정상.
+    # 모든 LLM 기능의 공통 provider. 기본은 로컬에 로그인된 Codex CLI이고 OpenAI API는 호환용.
+    llm_provider: Literal["codex", "openai-api"] = "codex"
+    codex_model: str | None = None
+    codex_timeout_seconds: int = 600
+
+    # Deprecated OpenAI API provider 호환용.
     openai_api_key: SecretStr | None = None
     openai_judge_model: str = "gpt-4o"
 
@@ -111,7 +117,7 @@ class Settings(BaseSettings):
         return [env for env in environments.ENVIRONMENTS if self.has_langfuse_credentials(env)]
 
     def has_openai_credentials(self) -> bool:
-        """OpenAI 키가 설정됐는지(채점 가능 여부)."""
+        """Deprecated OpenAI API provider용 키가 설정됐는지."""
         return self.openai_api_key is not None
 
 

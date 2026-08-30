@@ -9,8 +9,12 @@ from __future__ import annotations
 import streamlit as st
 
 from app import environments
-from app.analysis.judge import get_openai_client
-from app.config import get_settings
+from app.analysis.providers import (
+    JudgeProviderError,
+    get_llm_provider,
+    llm_provider_label,
+    llm_setup_error,
+)
 from app.langfuse_client import get_trace
 from app.storage import store
 from app.storage.paths import collection_file, improvements_dir, testdata_file
@@ -34,29 +38,12 @@ def _load_improvements() -> list[dict]:
 
 
 def _gen_from_improvement(plan_text: str) -> TestSuite:
-    client = get_openai_client()
-    model = get_settings().openai_judge_model
     user = f"[개선책]\n{plan_text}\n\n이 개선이 실제로 반영됐는지 검증하는 테스트 케이스를 만들어라."
-
-    def call(**extra):
-        return client.chat.completions.parse(
-            model=model,
-            messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-            response_format=TestSuite,
-            **extra,
-        )
-
-    try:
-        completion = call(temperature=0)
-    except Exception as exc:  # noqa: BLE001
-        if "temperature" in str(exc).lower():
-            completion = call()
-        else:
-            raise
-    suite = completion.choices[0].message.parsed
-    if suite is None:
-        raise RuntimeError("모델이 구조화 결과를 반환하지 않았습니다.")
-    return suite
+    return get_llm_provider().generate_structured(
+        system_prompt=_SYSTEM,
+        user_prompt=user,
+        result_model=TestSuite,
+    )
 
 
 def _tab_from_improvement() -> None:
@@ -67,15 +54,26 @@ def _tab_from_improvement() -> None:
     labels = {i.get("slug", "?"): i for i in improvements}
     key = st.selectbox("개선책 선택", options=list(labels.keys()))
     slug = st.text_input("저장 이름", value=f"{key}-verify", key="td_imp_slug")
-    if st.button("테스트 케이스 생성", type="primary", disabled=not get_settings().has_openai_credentials(), key="td_imp_btn"):
+    setup_error = llm_setup_error()
+    if st.button(
+        "테스트 케이스 생성",
+        type="primary",
+        disabled=setup_error is not None,
+        key="td_imp_btn",
+    ):
         try:
-            with st.spinner("생성 중… (OpenAI)"):
+            with st.spinner(f"생성 중… ({llm_provider_label()})"):
                 suite = _gen_from_improvement(labels[key].get("plan", ""))
             store.save_json(testdata_file("from-improvement", slug), suite.model_dump())
             st.session_state["td_imp_json"] = testsuite_to_json(suite)
             st.toast(f"저장: testdata/from-improvement/{slug}.json")
+        except JudgeProviderError as exc:
+            st.error(f"생성 실패 [{exc.code}]: {exc}")
         except Exception as exc:  # noqa: BLE001
             st.error(f"생성 실패: {type(exc).__name__}: {exc}")
+    st.caption(f"LLM Provider: {llm_provider_label()}")
+    if setup_error:
+        st.caption(setup_error)
     if st.session_state.get("td_imp_json"):
         st.download_button(
             "테스트 스위트 .json", data=st.session_state["td_imp_json"], file_name="testsuite.json", mime="application/json"

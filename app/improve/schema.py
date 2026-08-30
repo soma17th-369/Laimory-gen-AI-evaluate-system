@@ -1,4 +1,4 @@
-"""프롬프트 개선 제안 계약 (M4a). OpenAI structured output 으로 받는다."""
+"""프롬프트 개선 제안 계약 (M4a). LLM provider의 structured output으로 받는다."""
 
 from __future__ import annotations
 

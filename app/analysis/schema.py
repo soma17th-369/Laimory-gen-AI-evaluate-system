@@ -1,7 +1,7 @@
 """채점 결과 계약 (M2).
 
-OpenAI structured output(`chat.completions.parse`)의 `response_format` 으로 쓰는 Pydantic
-모델. 점수 범위(0~10)는 스키마에 minimum/maximum 을 넣지 않고(strict 모드 호환) 프롬프트로
+LLM provider의 structured output을 검증하는 Pydantic 모델. 점수 범위(0~10)는 스키마에
+minimum/maximum 을 넣지 않고(strict 모드 호환) 프롬프트로
 지시한 뒤 코드에서 clamp 한다.
 """
 
