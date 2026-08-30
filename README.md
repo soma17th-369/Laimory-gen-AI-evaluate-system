@@ -15,7 +15,16 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    uv sync
    ```
 
-2. `.env.example` 을 `.env` 로 복사하고 키를 채웁니다.
+2. Codex CLI를 확인하고 ChatGPT 계정으로 로그인합니다. ChatGPT 데스크톱 앱의 로그인 상태와
+   CLI 인증 상태가 같다고 가정하지 않습니다.
+
+   ```powershell
+   codex --version
+   codex login
+   codex login status
+   ```
+
+3. `.env.example` 을 `.env` 로 복사하고 필요한 값을 채웁니다.
 
    | 변수 | 쓰임 |
    | --- | --- |
@@ -23,14 +32,34 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    | `LANGFUSE_PROD_PUBLIC_KEY` / `LANGFUSE_PROD_SECRET_KEY` | 운영(prod) 프로젝트 로그 조회 |
    | `LANGFUSE_HOST` | 리전에 맞는 주소 (EU/US/JP/셀프호스트). 두 프로젝트 공통 |
    | `LANGFUSE_DEV_HOST` / `LANGFUSE_PROD_HOST` | 인스턴스가 서로 다를 때만. 비우면 `LANGFUSE_HOST` |
-   | `OPENAI_API_KEY` | 채점·개선책·테스트 데이터 생성. 없으면 조회만 가능합니다 |
-   | `OPENAI_JUDGE_MODEL` | judge 모델 (기본 `gpt-4o`) |
+   | `LLM_PROVIDER` | 모든 LLM 기능의 실행 방식. 기본 `codex`, 호환용 `openai-api` |
+   | `CODEX_MODEL` | Codex 모델. 비우면 Codex CLI 기본 모델 |
+   | `CODEX_TIMEOUT_SECONDS` | Codex 실행 한 번의 제한 시간(기본 600초) |
+   | `OPENAI_API_KEY` | deprecated OpenAI API provider를 선택할 때만 필요 |
+   | `OPENAI_JUDGE_MODEL` | deprecated OpenAI API provider가 쓸 모델(기본 `gpt-4o`) |
 
    키가 있는 프로젝트만 수집합니다. 접두사 없는 예전 이름
    (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`)은 **dev 값으로 계속 읽으므로**, 쓰던 `.env` 를
    그대로 두고 `LANGFUSE_PROD_*` 두 줄만 더하면 됩니다.
 
-   키는 `.env` 에만 두고 커밋하지 않습니다.
+   키는 `.env` 에만 두고 커밋하지 않습니다. Codex 실패 시 OpenAI API로 자동 fallback하지
+   않으며 provider는 `LLM_PROVIDER`로만 명시적으로 바꿉니다.
+
+### LLM 실행 방식
+
+Task 채점, 프롬프트 개선 제안, 개선책 본문, 테스트 데이터 생성의 기본 경로는 모두
+`CodexProvider → codex exec`입니다. 각 호출은 이전 대화를 이어받지 않는 `--ephemeral` 실행이고,
+읽기 전용의 빈 임시 디렉터리에서 동작합니다. 지시와 입력은 stdin으로 전달합니다. 구조화 결과는
+기능별 Pydantic JSON Schema를 `--output-schema`로 강제하고 저장 전에 같은 모델로 다시 검증합니다.
+
+상위 기능에는 OpenAI 직접 호출이 없지만, 기존 API 구현은 deprecated provider로 남아 있습니다.
+필요할 때만 `.env`에서 다음처럼 명시합니다.
+
+```dotenv
+LLM_PROVIDER=openai-api
+OPENAI_API_KEY=...
+OPENAI_JUDGE_MODEL=gpt-4o
+```
 
 ## 실행
 

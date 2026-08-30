@@ -26,11 +26,14 @@ Laimory 의 생성형 AI가 남긴 실행 로그를 분석해 **품질을 측정
 
 - **확정**: GUI 는 Streamlit(로컬 브라우저 실행), LangFuse 접근은 공식 Python SDK(`langfuse` v4).
   진입점은 `app/main.py`, 코드는 `app/` 패키지.
-- **잠정**: 분석·채점·생성에 쓰는 LLM provider 는 **OpenAI**(사용자 잠정 결정, 확정 아님).
+- **확정**: 채점·프롬프트 개선·개선책·테스트 데이터 생성의 공통 LLM provider는 ChatGPT 계정으로
+  인증된 로컬 **Codex CLI**(`codex exec`)다. 각 호출은 ephemeral·read-only로 독립 실행하고,
+  구조화 기능은 해당 Pydantic JSON Schema로 결과를 제한한다. OpenAI API 구현은 명시적으로만
+  선택하는 deprecated 호환 provider이며 자동 fallback하지 않는다.
 - **확정**: 하루 타임라인 채점은 `judge-rubric` v4를 사용한다. grounding·temporal·place·
   coverage·composition·writing·question의 7개 기준과 overall을 0~10으로 평가하며, 점수 전에
   AI 서버 v3가 정의한 20개 정량 Metric을 계산한다. v4는 v2 전체 기준과 v3 Metric 원본을
   합성한 버전이다.
 - **미정**: 테스트 데이터 스키마의 최종 형태.
-- 실제 secret·token(LangFuse 키·OpenAI 키 등)·사용자 원문·프롬프트 원문은 문서·운영 로그·
+- 실제 secret·token(LangFuse 키·Codex 인증·OpenAI 키 등)·사용자 원문·프롬프트 원문은 문서·운영 로그·
   저장소에 남기지 않는다.
