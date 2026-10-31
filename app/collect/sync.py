@@ -176,67 +176,79 @@ def sync(
     page = 1
     watermark: datetime | None = None
 
-    while max_pages is None or pages < max_pages:
-        response = list_traces(
-            page=page,
-            limit=page_size,
-            from_timestamp=cursor,
-            order_by="timestamp.asc",
-            fields=LIST_FIELDS,
-            env=environment,
+    def persist() -> tuple[int, int]:
+        """지금까지 받은 행과 커서를 저장한다. 반환은 (그 환경 행 수, 전체 행 수)."""
+        rows = sorted(
+            merged.values(),
+            key=lambda row: parse_timestamp(row.get("timestamp")) or _OLDEST,
+            reverse=True,
         )
-        batch = [row_of(trace, environment) for trace in getattr(response, "data", []) or []]
-        pages += 1
-        fetched += len(batch)
-        for row in batch:
-            stamp = parse_timestamp(row.get("timestamp"))
-            if stamp is not None and (watermark is None or stamp > watermark):
-                watermark = stamp
-            trace_id = row.get("id")
-            if not trace_id:
-                continue
-            current = merged.get(trace_id)
-            if current is None:
-                added += 1
-            elif current != row:
-                updated += 1
-            else:
-                continue
-            merged[trace_id] = row
-        if on_progress is not None:
-            on_progress(pages, fetched)
+        if added or updated or not collection_file().exists():
+            store.save_json(collection_file(), rows)
 
-        total_pages = getattr(getattr(response, "meta", None), "total_pages", None)
-        if not batch or (total_pages is not None and page >= total_pages):
-            completed = True
-            break
-        page += 1
+        environment_total = len(rows_of(rows, environment))
+        # 이번에 훑은 구간의 끝까지만 커서를 옮긴다(아무것도 못 받았으면 이전 커서 유지).
+        newest = watermark if watermark is not None else cursor
+        states[environment] = {
+            "backfilled": bool(state.get("backfilled")) or backfill,
+            "last_timestamp": newest.isoformat() if newest is not None else None,
+            "last_synced_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+            "total": environment_total,
+        }
+        store.save_json(collection_state_file(), states)
+        return environment_total, len(rows)
 
-    rows = sorted(
-        merged.values(),
-        key=lambda row: parse_timestamp(row.get("timestamp")) or _OLDEST,
-        reverse=True,
-    )
-    if added or updated or not collection_file().exists():
-        store.save_json(collection_file(), rows)
+    try:
+        while max_pages is None or pages < max_pages:
+            response = list_traces(
+                page=page,
+                limit=page_size,
+                from_timestamp=cursor,
+                order_by="timestamp.asc",
+                fields=LIST_FIELDS,
+                env=environment,
+            )
+            batch = [row_of(trace, environment) for trace in getattr(response, "data", []) or []]
+            pages += 1
+            fetched += len(batch)
+            for row in batch:
+                stamp = parse_timestamp(row.get("timestamp"))
+                if stamp is not None and (watermark is None or stamp > watermark):
+                    watermark = stamp
+                trace_id = row.get("id")
+                if not trace_id:
+                    continue
+                current = merged.get(trace_id)
+                if current is None:
+                    added += 1
+                elif current != row:
+                    updated += 1
+                else:
+                    continue
+                merged[trace_id] = row
+            if on_progress is not None:
+                on_progress(pages, fetched)
 
-    environment_total = len(rows_of(rows, environment))
-    # 이번에 훑은 구간의 끝까지만 커서를 옮긴다(아무것도 못 받았으면 이전 커서 유지).
-    newest = watermark if watermark is not None else cursor
-    states[environment] = {
-        "backfilled": bool(state.get("backfilled")) or backfill,
-        "last_timestamp": newest.isoformat() if newest is not None else None,
-        "last_synced_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "total": environment_total,
-    }
-    store.save_json(collection_state_file(), states)
+            total_pages = getattr(getattr(response, "meta", None), "total_pages", None)
+            if not batch or (total_pages is not None and page >= total_pages):
+                completed = True
+                break
+            page += 1
+    except BaseException:
+        # 조회가 중간에 끊겨도(호출 한도·네트워크·화면 중단) 받은 만큼은 남긴다. 오름차순으로
+        # 훑었으므로 받은 행의 최신 시각이 그대로 다음 실행의 시작점이 된다.
+        if pages:
+            persist()
+        raise
+
+    environment_total, stored_total = persist()
     return SyncResult(
         mode="backfill" if backfill else "incremental",
         environment=environment,
         added=added,
         updated=updated,
         total=environment_total,
-        stored_total=len(rows),
+        stored_total=stored_total,
         fetched=fetched,
         pages=pages,
         completed=completed,
