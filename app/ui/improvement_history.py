@@ -68,9 +68,9 @@ def _fmt_change(delta: compare.MetricDelta) -> str:
         text += f" ({ratio:+.0%})"
     improved = delta.improved
     if improved is True:
-        return f"🟢 {text}"
+        return f"{text} 개선"
     if improved is False:
-        return f"🔴 {text}"
+        return f"{text} 악화"
     return text
 
 
@@ -137,11 +137,11 @@ def _render_segment(
     if after.score_n == 0:
         st.caption("이 구간에 채점된 task 가 없어 점수 비교는 비어 있습니다. Task 리뷰에서 채점하면 채워집니다.")
 
-    criteria = compare.criterion_deltas(before, after)
-    if criteria:
-        with st.expander(f"채점 기준별 점수 ({after.score_n}개 task)"):
+    stage_rows = compare.stage_deltas(before, after)
+    if stage_rows:
+        with st.expander(f"평가 대상별 점수 ({after.score_n}개 task)"):
             st.dataframe(
-                _delta_table(criteria, segment.previous_label), width="stretch", hide_index=True
+                _delta_table(stage_rows, segment.previous_label), width="stretch", hide_index=True
             )
 
     if after.models:
@@ -180,7 +180,7 @@ def _render_segment(
 
 
 def render() -> None:
-    st.title("📈 개선 history")
+    st.title("개선 history")
     st.caption(
         "반영된 개선책을 시간 순으로 놓고, 반영 이후 결과가 실제로 달라졌는지 확인합니다. "
         "개발·운영 로그를 합쳐 봅니다."

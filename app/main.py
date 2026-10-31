@@ -26,13 +26,13 @@ from app.ui import (  # noqa: E402
     improvement,
     improvement_history,
     log_collection,
+    rubric_settings,
     task_review,
     testdata,
 )
 
 st.set_page_config(
     page_title="Laimory 생성형 AI 평가",
-    page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -52,18 +52,18 @@ st.markdown(
 )
 
 _PAGES = [
-    st.Page(dashboard.render, title="대시보드", icon="📊", url_path="dashboard", default=True),
-    st.Page(log_collection.render, title="LangFuse 로그 수집", icon="📥", url_path="log-collection"),
-    st.Page(task_review.render, title="Task 리뷰·채점", icon="🔍", url_path="task-review"),
-    st.Page(evaluation_results.render, title="채점 결과", icon="📋", url_path="evaluation-results"),
-    st.Page(improvement.render, title="개선책", icon="🛠", url_path="improvement"),
+    st.Page(dashboard.render, title="대시보드", url_path="dashboard", default=True),
+    st.Page(log_collection.render, title="LangFuse 로그 수집", url_path="log-collection"),
+    st.Page(task_review.render, title="Task 리뷰·채점", url_path="task-review"),
+    st.Page(evaluation_results.render, title="채점 결과", url_path="evaluation-results"),
+    st.Page(improvement.render, title="개선책", url_path="improvement"),
     st.Page(
         improvement_history.render,
         title="개선 history",
-        icon="📈",
         url_path="improvement-history",
     ),
-    st.Page(testdata.render, title="테스트 데이터", icon="🧪", url_path="testdata"),
+    st.Page(testdata.render, title="테스트 데이터", url_path="testdata"),
+    st.Page(rubric_settings.render, title="채점 기준 설정", url_path="rubric-settings"),
 ]
 
 st.navigation(_PAGES).run()

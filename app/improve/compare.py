@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from app import environments
-from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS
+from app.analysis import evaluation_record, stages
 from app.collect.sync import parse_timestamp
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
@@ -104,7 +104,8 @@ class Aggregate:
     tokens_n: int = 0
     score_avg: float | None = None
     score_n: int = 0
-    criterion_avg: dict[str, float] = field(default_factory=dict)
+    stage_avg: dict[str, float] = field(default_factory=dict)
+    """평가 대상(stageKey) → 그 구간의 평균 점수(100점 만점)."""
     models: dict[str, int] = field(default_factory=dict)
     """모델명 → 그 모델을 쓴 트레이스 수(상세 조회한 트레이스 한정)."""
 
@@ -147,23 +148,22 @@ def aggregate(
             scored_tasks[str(task_id)] = evaluations[str(task_id)]
 
     overalls: list[float] = []
-    per_criterion: dict[str, list[float]] = {key: [] for key in CRITERION_KEYS}
+    per_stage: dict[str, list[float]] = {key: [] for key in stages.STAGE_KEYS}
     for evaluation in scored_tasks.values():
-        card = evaluation.get("scorecard") or {}
-        overall = _number((card.get("overall") or {}).get("score"))
-        if overall is not None:
-            overalls.append(overall)
-        scores = card.get("scores") or {}
-        for key in CRITERION_KEYS:
-            value = _number((scores.get(key) or {}).get("score"))
+        composite = _number(evaluation_record.composite_score(evaluation))
+        if composite is not None:
+            overalls.append(composite)
+        stage_scores = (evaluation.get("composite") or {}).get("stageScores") or {}
+        for key in stages.STAGE_KEYS:
+            value = _number(stage_scores.get(key))
             if value is not None:
-                per_criterion[key].append(value)
+                per_stage[key].append(value)
 
-    criterion_avg: dict[str, float] = {}
-    for key, values in per_criterion.items():
+    stage_avg: dict[str, float] = {}
+    for key, values in per_stage.items():
         mean = _mean(values)
         if mean is not None:
-            criterion_avg[key] = mean
+            stage_avg[key] = mean
 
     return Aggregate(
         traces=len(rows),
@@ -174,7 +174,7 @@ def aggregate(
         tokens_n=len(tokens),
         score_avg=_mean(overalls),
         score_n=len(overalls),
-        criterion_avg=criterion_avg,
+        stage_avg=stage_avg,
         models=models,
     )
 
@@ -220,7 +220,7 @@ def deltas(before: Aggregate, after: Aggregate) -> list[MetricDelta]:
         MetricDelta("traces", "트레이스 수", before.traces, after.traces, before.traces, after.traces),
         MetricDelta(
             "score", "종합 점수", before.score_avg, after.score_avg,
-            before.score_n, after.score_n, better="up", unit="/10",
+            before.score_n, after.score_n, better="up", unit="/100",
         ),
         MetricDelta(
             "cost_avg", "평균 비용", before.cost_avg, after.cost_avg,
@@ -238,17 +238,17 @@ def deltas(before: Aggregate, after: Aggregate) -> list[MetricDelta]:
     ]
 
 
-def criterion_deltas(before: Aggregate, after: Aggregate) -> list[MetricDelta]:
-    """채점 기준별 점수 전후(둘 중 한쪽이라도 값이 있는 기준만)."""
+def stage_deltas(before: Aggregate, after: Aggregate) -> list[MetricDelta]:
+    """평가 대상(Agent)별 점수 전후. 어느 단계가 좋아지고 나빠졌는지가 개선의 근거다."""
     out = []
-    for key in CRITERION_KEYS:
-        low, high = before.criterion_avg.get(key), after.criterion_avg.get(key)
+    for key in stages.STAGE_KEYS:
+        low, high = before.stage_avg.get(key), after.stage_avg.get(key)
         if low is None and high is None:
             continue
         out.append(
             MetricDelta(
-                key, CRITERION_LABELS.get(key, key), low, high,
-                before.score_n, after.score_n, better="up", unit="/10",
+                key, stages.get(key).label, low, high,
+                before.score_n, after.score_n, better="up", unit="/100",
             )
         )
     return out
@@ -275,7 +275,6 @@ def result_rows(
         meta = rollup.get(str(row.get("id"))) or {}
         task_id = row.get("taskId")
         evaluation = evaluations.get(str(task_id)) if task_id else None
-        card = (evaluation or {}).get("scorecard") or {}
         models = meta.get("models") or []
         out.append(
             {
@@ -286,7 +285,7 @@ def result_rows(
                 "토큰": meta.get("totalTokens"),
                 "비용": row.get("total_cost"),
                 "latency(s)": row.get("latency"),
-                "종합점수": (card.get("overall") or {}).get("score"),
+                "종합점수": evaluation_record.composite_score(evaluation) if evaluation else None,
                 "taskId": task_id,
                 "traceId": row.get("id"),
             }

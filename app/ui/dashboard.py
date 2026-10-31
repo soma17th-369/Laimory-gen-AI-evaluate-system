@@ -15,7 +15,7 @@ from app.storage.paths import collection_file
 
 
 def render() -> None:
-    st.title("📊 대시보드")
+    st.title("대시보드")
     st.caption("공용으로 수집된 LangFuse 로그 통계 · 총 사용량 (개발·운영 합계)")
 
     rows = store.load_json(collection_file())

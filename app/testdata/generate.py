@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
+from app.analysis import evaluation_record
 from app.analysis.providers import get_llm_provider
-from app.analysis.schema import CRITERION_LABELS, TraceScorecard
 from app.testdata.schema import TestSuite
 
 _SYSTEM_PROMPT = """\
@@ -21,25 +21,17 @@ _SYSTEM_PROMPT = """\
   또는 '나오면 안 됨'). 기준(temporal/place/…)에 대응하는 검증 조건.
 
 규칙:
-- 문제점 하나당 하나 이상 케이스. 각 케이스는 targets_criteria 로 검증 기준을 밝힌다.
+- 문제점 하나당 하나 이상 케이스. 각 케이스는 targets_criteria 로 검증 기준(평가 대상·항목 키)을 밝힌다.
 - 실제 개인정보/실명/실주소를 쓰지 않는다(가상의 값).
 - 모든 텍스트는 한국어. 지정된 JSON 스키마로만 답한다.
 """
 
 
-def _findings_text(scorecard: TraceScorecard) -> str:
-    lines = [f"- 종합 {scorecard.overall.score}/10: {scorecard.summary}"]
-    for finding in scorecard.findings:
-        label = CRITERION_LABELS.get(finding.criterion, finding.criterion)
-        lines.append(f"- [{finding.severity}] ({label}) {finding.description}")
-    return "\n".join(lines)
-
-
-def generate_test_cases(scorecard: TraceScorecard) -> TestSuite:
-    """채점 문제점 → 재현·검증 테스트 스위트."""
+def generate_test_cases(record: dict) -> TestSuite:
+    """단계별 채점의 감점 근거 → 재현·검증 테스트 스위트."""
     user = (
-        "[채점 문제점]\n"
-        f"{_findings_text(scorecard)}\n\n"
+        "[채점 문제점 — 평가 대상별]\n"
+        f"{evaluation_record.findings_text(record)}\n\n"
         "위 문제를 재현·검증하는 테스트 케이스(입력 + 기대 조건)를 만들어라."
     )
     return get_llm_provider().generate_structured(

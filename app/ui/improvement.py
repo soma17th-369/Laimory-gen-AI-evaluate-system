@@ -14,13 +14,13 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from app.analysis import evaluation_record
 from app.analysis.providers import (
     JudgeProviderError,
     get_llm_provider,
     llm_provider_label,
     llm_setup_error,
 )
-from app.analysis.schema import CRITERION_LABELS
 from app.collect.sync import parse_timestamp
 from app.improve import records
 from app.storage import store
@@ -35,24 +35,18 @@ _DEFAULT_INSTRUCTION = """다음은 여러 task 의 채점 문제점 모음이�
 
 
 def _load_evaluations() -> list[dict]:
+    """단계별 채점 결과만 모은다(구버전 단일 카드는 개선책 근거로 쓰지 않는다)."""
     out = []
     for path in list_json(evaluations_dir()):
         data = load_json(path)
-        if isinstance(data, dict):
+        if isinstance(data, dict) and not evaluation_record.is_legacy(data):
             out.append(data)
     return out
 
 
 def _findings_block(evaluations: list[dict]) -> str:
-    lines = []
-    for ev in evaluations:
-        sc = ev.get("scorecard", {})
-        overall = (sc.get("overall") or {}).get("score")
-        lines.append(f"## task {ev.get('taskId')} (종합 {overall}/10)")
-        for f in sc.get("findings", []) or []:
-            label = CRITERION_LABELS.get(f.get("criterion"), f.get("criterion"))
-            lines.append(f"- [{f.get('severity')}] ({label}) {f.get('description')}")
-    return "\n".join(lines)
+    """여러 task 의 감점 근거를 이어 붙인다(형식은 → [app.analysis.evaluation_record][])."""
+    return "\n".join(evaluation_record.findings_text(item) for item in evaluations)
 
 
 def _generate(evaluations: list[dict], instruction: str) -> str:
@@ -70,11 +64,12 @@ def _fmt_time(value: str | None) -> str:
 def _tab_generate() -> None:
     evaluations = _load_evaluations()
     if not evaluations:
-        st.info("먼저 **Task 리뷰·채점**에서 채점하면 평가가 여기에 쌓입니다.")
+        st.info("먼저 **Task 리뷰·채점**에서 단계별로 채점하면 평가가 여기에 쌓입니다.")
         return
 
     labels = {
-        f"{e.get('taskId')} · {e.get('name')} (종합 {(e.get('scorecard') or {}).get('overall', {}).get('score')}/10)": e
+        f"{e.get('taskId')} · {e.get('name')} "
+        f"(종합 {(e.get('composite') or {}).get('score')}/100)": e
         for e in evaluations
     }
     picked = st.multiselect("포함할 task 평가", options=list(labels.keys()), default=list(labels.keys()))
@@ -191,7 +186,7 @@ def _tab_status() -> None:
 
 
 def render() -> None:
-    st.title("🛠 개선책")
+    st.title("개선책")
     st.caption("여러 task 의 평가를 모아 하나의 개선책을 만들고, 반영 여부·시기를 관리합니다.")
 
     generate_tab, status_tab = st.tabs(["개선책 생성", "반영 상태"])
