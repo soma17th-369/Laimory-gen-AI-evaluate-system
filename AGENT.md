@@ -91,8 +91,9 @@ uv run streamlit run app/main.py
 때 streamlit 의 이메일 입력 프롬프트에서 멈추므로 그대로 두어야 합니다. 창을 닫으면 종료됩니다.
 
 - LangFuse 접근은 공식 Python SDK(`langfuse`)를 사용합니다. 키(public/secret)와 host 는
-  환경변수(`.env`)로 주입하고, **키·로그 본문·프롬프트 원문은 저장소·운영 로그에 남기지
-  않습니다.**
+  환경변수(`.env`)로 주입하고, **키와 LangFuse 에서 받은 로그 본문(프롬프트·입출력 포함)은
+  저장소·운영 로그에 남기지 않습니다.** 대상 서버의 파이프라인 설명 문서
+  (`assets/docs/laimory-pipeline.html`)는 예외로, 프롬프트 세트 원문을 담은 채 저장소에 둡니다.
 
 ## 스킬 공유
 

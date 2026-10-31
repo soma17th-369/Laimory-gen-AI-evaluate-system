@@ -38,5 +38,6 @@ Laimory 의 생성형 AI가 남긴 실행 로그를 분석해 **품질을 측정
   그 문서의 해당 절 원문이 그대로 프롬프트가 된다. 종합 스코어는 채점된 대상들의 단순 평균이다.
   자세한 계약은 [단계별 채점](stage-evaluation.md) 을 참고한다.
 - **미정**: 테스트 데이터 스키마의 최종 형태.
-- 실제 secret·token(LangFuse 키·Codex/Claude Code 인증·OpenAI 키 등)·사용자 원문·프롬프트 원문은 문서·운영 로그·
-  저장소에 남기지 않는다.
+- 실제 secret·token(LangFuse 키·Codex/Claude Code 인증·OpenAI 키 등)·사용자 원문·LangFuse 에서 받은 로그 본문은
+  문서·운영 로그·저장소에 남기지 않는다. 대상 서버의 파이프라인 설명 문서
+  (`assets/docs/laimory-pipeline.html`)는 예외로, 프롬프트 세트 원문을 담은 채 저장소에 둔다.
