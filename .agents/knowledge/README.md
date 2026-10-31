@@ -26,6 +26,7 @@
 | [domain/stage-evaluation.md](domain/stage-evaluation.md) | 단계별 채점 계약(평가 대상 8개·근거 위치·총점 규칙·저장 포맷) | 채점 기준·근거 슬라이스·점수 계산·채점 결과 저장을 손댈 때 | `app/analysis/`·`assets/rubrics/`·`app/ui/task_review.py`·`app/ui/evaluation_results.py` | 평가 대상·배점·근거 범위·총점 규칙·저장 스키마가 바뀔 때 |
 | [domain/trace-json-spec.md](domain/trace-json-spec.md) | Task 리뷰 `trace.json` 저장 구조(정본·중복금지) | Page2 저장/표시, trace_builder 를 손댈 때 | `app/tasks/`·`app/ui/task_review.py`·`app/storage/` | trace.json 구조·정본·중복 규칙이 바뀔 때 |
 | [domain/ubiquitous-language.md](domain/ubiquitous-language.md) | 프로젝트 공통 용어(도메인 이름·필드·개념) | 새 이름/필드/개념을 만들거나 바꿀 때 | (전역) | 용어의 정의·표기가 바뀌거나 새 핵심 용어가 확정됐을 때 |
+| [에이전트 사용 안내](../../docs/에이전트-사용-안내.md) | 저장소 밖 에이전트가 수집·선택·채점을 실행하는 절차와 예시 코드 | 수집·채점 호출부나 저장 결과 필드를 손댈 때 | `app/collect/sync.py`·`app/ui/task_review.py`·`app/analysis/stage_judge.py`·`app/analysis/evaluation_record.py`·`app/langfuse_client.py` | 예시 코드가 쓰는 함수·저장 필드·오류 코드가 바뀔 때 |
 | [conventions/issue.md](conventions/issue.md) | 이슈 제목·라벨 형식 | 이슈를 만들거나 제목을 고칠 때 | (해당 없음) | 허용 Type·아이콘·형식이 바뀔 때 |
 | [conventions/commit.md](conventions/commit.md) | 커밋 분할·메시지 형식 | commit 을 나누거나 message 를 쓸 때 | (전역) | 커밋 분할 기준·message 형식이 바뀔 때 |
 | [conventions/pull-request.md](conventions/pull-request.md) | PR 작성·검토 절차 | PR 을 만들거나 리뷰할 때 | `.github/` | PR 템플릿·검토 기준이 바뀔 때 |
