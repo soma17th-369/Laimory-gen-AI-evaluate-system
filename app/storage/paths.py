@@ -118,3 +118,12 @@ def testdata_dir(kind: str) -> Path:
 
 def testdata_file(kind: str, slug: str) -> Path:
     return testdata_dir(kind) / f"{_safe(slug)}.json"
+
+
+def dev_test_dir() -> Path:
+    """dev 타임라인 테스트 엔드포인트 실행 기록. 실행마다 요청·응답을 파일 하나로 남긴다."""
+    return data_root() / "dev-test"
+
+
+def dev_test_run_file(run_id: str) -> Path:
+    return dev_test_dir() / f"{_safe(run_id)}.json"

@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     openai_judge_model: str = "gpt-4o"
 
+    # dev 서버의 타임라인 AI 테스트 엔드포인트(`POST /t/api/{applicationVersion}/timeline/test`).
+    # URL 은 applicationVersion 까지 넣은 전체 주소. 토큰이 있으면 `Authorization: Bearer` 로 보낸다.
+    timeline_test_url: str | None = None
+    timeline_test_access_token: SecretStr | None = None
+    # 서버가 AI 응답을 최대 150초 기다리므로 그보다 넉넉하게 잡는다.
+    timeline_test_timeout_seconds: int = 180
+
     # 파일 저장 루트(로그·평가·개선책·테스트데이터). 프로젝트 루트 기준 상대경로. gitignore 대상.
     data_dir: str = "data"
 

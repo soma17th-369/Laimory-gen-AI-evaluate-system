@@ -22,6 +22,7 @@ import streamlit as st  # noqa: E402
 
 from app.ui import (  # noqa: E402
     dashboard,
+    dev_test,
     evaluation_results,
     improvement,
     improvement_history,
@@ -63,6 +64,7 @@ _PAGES = [
         url_path="improvement-history",
     ),
     st.Page(testdata.render, title="테스트 데이터", url_path="testdata"),
+    st.Page(dev_test.render, title="Dev 환경 테스트", url_path="dev-test"),
     st.Page(rubric_settings.render, title="채점 기준 설정", url_path="rubric-settings"),
 ]
 
