@@ -102,11 +102,23 @@ def get_openai_client() -> OpenAI:
 
 
 def _strict_json_schema(result_model: type[BaseModel]) -> dict:
-    """Pydantic schema의 모든 object에서 미정의 필드를 금지한다."""
+    """Pydantic schema를 provider의 strict JSON Schema 규칙에 맞춘다.
+
+    - 모든 object에서 미정의 필드를 금지한다.
+    - `$ref` 옆에 다른 keyword를 두지 않는다. 중첩 모델 필드에 `Field(description=...)`을 주면
+      Pydantic이 `{"$ref": …, "description": …}`을 만드는데, strict 모드는 이를 거부한다
+      (`$ref cannot have keywords {'description'}`). 설명은 채점 기준 프롬프트가 이미 담고 있으므로
+      스키마에서는 참조만 남긴다.
+    """
     schema = result_model.model_json_schema()
 
     def visit(node: object) -> None:
         if isinstance(node, dict):
+            if "$ref" in node and len(node) > 1:
+                ref = node["$ref"]
+                node.clear()
+                node["$ref"] = ref
+                return
             if node.get("type") == "object" or "properties" in node:
                 node["additionalProperties"] = False
             for value in node.values():

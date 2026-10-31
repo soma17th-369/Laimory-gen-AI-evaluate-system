@@ -22,17 +22,21 @@ from app.analysis.providers import (
     get_judge_provider,
     get_llm_provider,
 )
-from app.analysis.schema import CRITERION_KEYS, METRIC_KEYS, TraceScorecard
+from app.analysis import stage_schema, stages
 from app.config import Settings
+
+# 구조화 출력 계약은 단계별 채점 모델이다(배점표에서 만들어진다).
+StageScorecard = stage_schema.scorecard_model("question")
 
 
 def _scorecard_data() -> dict:
-    metric = {"value": 50, "numerator": 1, "denominator": 2, "reason": "계산 근거"}
     return {
-        "scores": {key: {"score": 8, "reason": "점수 근거"} for key in CRITERION_KEYS},
-        "metrics": {key: dict(metric) for key in METRIC_KEYS},
-        "overall": {"score": 8, "reason": "종합 근거"},
-        "findings": [],
+        "items": {
+            item.key: {"score": item.points, "applied": True, "reason": "점수 근거"}
+            for item in stages.get("question").items
+        },
+        "deductions": [],
+        "alerts": [],
         "summary": "종합 평가",
     }
 
@@ -62,7 +66,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
             result = provider.evaluate(
                 system_prompt="평가 기준",
                 user_prompt="평가 입력",
-                result_model=TraceScorecard,
+                result_model=StageScorecard,
             )
         return result, captured
 
@@ -73,7 +77,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
         )
 
         command = captured["command"]
-        self.assertEqual(result.overall.score, 8)
+        self.assertEqual(result.items.reflection.score, 30)
         self.assertIn("--ephemeral", command)
         self.assertIn("--skip-git-repo-check", command)
         self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
@@ -118,7 +122,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
                 CodexJudgeProvider().evaluate(
                     system_prompt="기준",
                     user_prompt="입력",
-                    result_model=TraceScorecard,
+                    result_model=StageScorecard,
                 )
         self.assertEqual(caught.exception.code, "CODEX_NOT_INSTALLED")
 
@@ -132,7 +136,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
                 CodexJudgeProvider().evaluate(
                     system_prompt="기준",
                     user_prompt="입력",
-                    result_model=TraceScorecard,
+                    result_model=StageScorecard,
                 )
         self.assertEqual(caught.exception.code, "CODEX_NOT_AUTHENTICATED")
         self.assertIn("codex login", str(caught.exception))
@@ -155,7 +159,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
                 CodexJudgeProvider(timeout_seconds=1).evaluate(
                     system_prompt="기준",
                     user_prompt="입력",
-                    result_model=TraceScorecard,
+                    result_model=StageScorecard,
                 )
         self.assertEqual(caught.exception.code, "CODEX_TIMEOUT")
 
@@ -177,7 +181,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
                 CodexJudgeProvider().evaluate(
                     system_prompt="기준",
                     user_prompt="입력",
-                    result_model=TraceScorecard,
+                    result_model=StageScorecard,
                 )
         self.assertEqual(caught.exception.code, "CODEX_EXECUTION_FAILED")
 
@@ -191,7 +195,7 @@ class CodexJudgeProviderTests(unittest.TestCase):
         self.assertEqual(mismatch.exception.code, "SCHEMA_VALIDATION_FAILED")
 
     def test_generated_schema_forbids_extra_properties_recursively(self) -> None:
-        schema = _strict_json_schema(TraceScorecard)
+        schema = _strict_json_schema(StageScorecard)
         objects: list[dict] = []
 
         def collect(node: object) -> None:
@@ -208,6 +212,25 @@ class CodexJudgeProviderTests(unittest.TestCase):
         self.assertTrue(objects)
         self.assertTrue(all(item.get("additionalProperties") is False for item in objects))
 
+    def test_ref_keeps_no_sibling_keywords(self) -> None:
+        """strict 모드는 `$ref` 옆의 description 을 거부한다(중첩 모델 필드에서 생긴다)."""
+        schema = _strict_json_schema(StageScorecard)
+        refs: list[dict] = []
+
+        def collect(node: object) -> None:
+            if isinstance(node, dict):
+                if "$ref" in node:
+                    refs.append(node)
+                for value in node.values():
+                    collect(value)
+            elif isinstance(node, list):
+                for value in node:
+                    collect(value)
+
+        collect(schema)
+        self.assertTrue(refs)
+        self.assertTrue(all(set(item) == {"$ref"} for item in refs))
+
 
 class JudgeProviderSelectionTests(unittest.TestCase):
     def test_codex_is_default_provider(self) -> None:
@@ -223,7 +246,7 @@ class JudgeProviderSelectionTests(unittest.TestCase):
             self.assertIsInstance(get_judge_provider(), OpenAIApiJudgeProvider)
 
     def test_deprecated_openai_provider_keeps_structured_parse_behavior(self) -> None:
-        expected = TraceScorecard.model_validate(_scorecard_data())
+        expected = StageScorecard.model_validate(_scorecard_data())
         parse = mock.Mock(
             return_value=SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(parsed=expected))]
@@ -239,11 +262,11 @@ class JudgeProviderSelectionTests(unittest.TestCase):
             result = OpenAIApiJudgeProvider(model="gpt-test").evaluate(
                 system_prompt="기준",
                 user_prompt="입력",
-                result_model=TraceScorecard,
+                result_model=StageScorecard,
             )
 
         self.assertEqual(result, expected)
-        self.assertEqual(parse.call_args.kwargs["response_format"], TraceScorecard)
+        self.assertEqual(parse.call_args.kwargs["response_format"], StageScorecard)
 
 
 if __name__ == "__main__":
