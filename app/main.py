@@ -27,6 +27,7 @@ from app.ui import (  # noqa: E402
     improvement,
     improvement_history,
     log_collection,
+    pipeline_doc,
     rubric_settings,
     task_review,
     testdata,
@@ -54,6 +55,7 @@ st.markdown(
 
 _PAGES = [
     st.Page(dashboard.render, title="대시보드", url_path="dashboard", default=True),
+    st.Page(pipeline_doc.render, title="파이프라인 설명", url_path="pipeline"),
     st.Page(log_collection.render, title="LangFuse 로그 수집", url_path="log-collection"),
     st.Page(task_review.render, title="Task 리뷰·채점", url_path="task-review"),
     st.Page(evaluation_results.render, title="채점 결과", url_path="evaluation-results"),
