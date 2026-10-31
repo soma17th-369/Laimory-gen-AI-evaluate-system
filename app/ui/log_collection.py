@@ -7,6 +7,9 @@
 **키가 설정된 LangFuse 프로젝트를 한 번에 모두** 받아 한 목록에 합친다(→ [app.environments][]).
 목록은 환경과 무관하게 시간순이고, 어디서 온 로그인지는 `env` 열로 구분한다. 진행 상태(커서)만
 환경마다 따로라 한쪽을 다시 훑어도 다른 쪽 진행이 밀리지 않는다.
+
+위쪽(버튼·환경별 수집 현황)은 수집의 일이라 늘 모든 환경을 다룬다. 아래쪽 저장된 로그의 건수와
+목록만 환경 필터(→ [app.ui.env_filter][])를 따른다.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import streamlit as st
 from app import environments
 from app.collect import sync as collect
 from app.config import get_settings
+from app.ui import env_filter
 
 
 def _fmt_time(value: str | None) -> str:
@@ -126,18 +130,25 @@ def render() -> None:
 
     counts = {env: len(collect.rows_of(rows, env)) for env in environments.ENVIRONMENTS}
 
-    metric_cols = st.columns(2 + len(environments.ENVIRONMENTS))
-    metric_cols[0].metric("저장된 로그", f"{len(rows):,}")
-    metric_cols[1].metric("taskId", len({row.get("taskId") for row in rows if row.get("taskId")}))
-    for column, env in zip(metric_cols[2:], environments.ENVIRONMENTS):
-        column.metric(environments.label(env), f"{counts[env]:,}")
-
     st.subheader("환경별 수집 현황")
     st.dataframe(_status_table(states, counts, configured), width="stretch", hide_index=True)
 
-    st.subheader("저장된 로그 목록")
-    st.caption("환경과 무관하게 최신순입니다. `env` 열이 어느 프로젝트에서 온 로그인지 알려줍니다.")
-    frame = pd.DataFrame(rows)
+    st.subheader("저장된 로그")
+    envs = env_filter.pick()
+    shown = environments.keep(rows, envs)
+    # 한 환경만 볼 때는 환경별 건수가 저장된 로그 수와 같으므로 두 환경 이상일 때만 나눠 보인다.
+    split = envs if len(envs) > 1 else ()
+    metric_cols = st.columns(2 + len(split))
+    metric_cols[0].metric("저장된 로그", f"{len(shown):,}")
+    metric_cols[1].metric("taskId", len({row.get("taskId") for row in shown if row.get("taskId")}))
+    for column, env in zip(metric_cols[2:], split):
+        column.metric(environments.label(env), f"{counts[env]:,}")
+
+    if not shown:
+        st.info(f"{env_filter.scope_label(envs)}에서 저장된 로그가 없습니다.")
+        return
+    st.caption("최신순입니다. `env` 열이 어느 프로젝트에서 온 로그인지 알려줍니다.")
+    frame = pd.DataFrame(shown)
     if "env" in frame.columns:
         frame["env"] = frame["env"].fillna(environments.DEV)
     st.dataframe(frame, width="stretch", hide_index=True)

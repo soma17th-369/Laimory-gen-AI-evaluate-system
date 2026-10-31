@@ -1,7 +1,9 @@
 """③ 개선책 — task 별 저장된 평가를 골라 모아 하나의 개선책 생성.
 
 평가기준·지령은 화면에서 편집 후 전송. 결과는 data/improvements/<slug>.json 에 저장.
-여러 task 의 문제점을 통합한 하나의 개선책이 된다.
+여러 task 의 문제점을 통합한 하나의 개선책이 된다. 고를 수 있는 평가는 환경 필터
+(→ [app.ui.env_filter][])를 따른다. 저장된 개선책 자체는 환경에 속하지 않으므로 반영 상태 탭은
+거르지 않는다.
 
 생성한 개선책의 **반영 상태와 반영 시기**도 이 페이지에서 관리한다. 반영 시기를 확정한
 개선책만 개선 history 페이지의 전후 비교 대상이 된다(→ [app.improve.records][]).
@@ -14,6 +16,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from app import environments
 from app.analysis import evaluation_record
 from app.analysis.providers import (
     JudgeProviderError,
@@ -26,6 +29,7 @@ from app.improve import records
 from app.storage import store
 from app.storage.paths import evaluations_dir, improvement_file
 from app.storage.store import list_json, load_json
+from app.ui import env_filter
 
 _DEFAULT_INSTRUCTION = """다음은 여러 task 의 채점 문제점 모음이다. 공통·반복되는 문제를 묶고 우선순위를 매겨,
 파이프라인(프롬프트·후처리)을 어떻게 고칠지 실행 가능한 '개선책'을 한국어로 작성하라.
@@ -67,8 +71,14 @@ def _tab_generate() -> None:
         st.info("먼저 **Task 리뷰·채점**에서 단계별로 채점하면 평가가 여기에 쌓입니다.")
         return
 
+    envs = env_filter.pick()
+    evaluations = environments.keep(evaluations, envs)
+    if not evaluations:
+        st.info(f"{env_filter.scope_label(envs)}에서 채점한 task 가 없습니다.")
+        return
+
     labels = {
-        f"{e.get('taskId')} · {e.get('name')} "
+        f"[{environments.short_label(environments.of(e))}] {e.get('taskId')} · {e.get('name')} "
         f"(종합 {(e.get('composite') or {}).get('score')}/100)": e
         for e in evaluations
     }

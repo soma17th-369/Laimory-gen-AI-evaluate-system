@@ -6,7 +6,8 @@
 2. 그 채점이 정확히 무엇을 봤는지 — 단계별 근거(채점 프롬프트에 들어간 그대로).
 3. 채점 결과 — 항목별 점수와 이유, 감점 근거, 별도 알림.
 
-목록은 개발·운영 로그를 합쳐 보여준다(→ [app.environments][]). 상세 조회는 **그 행이 온 프로젝트로** 보내야 하므로 선택한 행의
+목록은 개발·운영 로그를 합쳐 보여주고, 환경 필터(→ [app.ui.env_filter][])로 한 환경만 남길 수
+있다(→ [app.environments][]). 상세 조회는 **그 행이 온 프로젝트로** 보내야 하므로 선택한 행의
 `env` 를 그대로 따라간다.
 
 수집 목록에는 대상 서버의 **테스트 실행**(taskId 가 `task-test` 고정, 비용 0, 관측치 1~7개)이
@@ -28,7 +29,7 @@ from app.langfuse_client import get_trace
 from app.storage import store
 from app.storage.paths import collection_file, task_trace_file
 from app.tasks.trace_builder import build_trace_json
-from app.ui import stage_view
+from app.ui import env_filter, stage_view
 
 _COLUMN_ORDER = (
     "env",
@@ -268,14 +269,19 @@ def render() -> None:
         st.info("먼저 **LangFuse 로그 수집** 페이지에서 로그를 수집하세요.")
         return
 
-    only_scorable = st.checkbox(
-        "채점 대상만 보기",
-        value=True,
-        help=(
-            "실제 실행(generate-timeline · update-user-memory)만 남깁니다. 나머지 이름은 대상 서버의 "
-            "테스트 실행이 남긴 조각이라 채점해도 의미가 없습니다."
-        ),
-    )
+    env_col, scorable_col = st.columns([1, 2], vertical_alignment="bottom")
+    with env_col:
+        envs = env_filter.pick()
+    with scorable_col:
+        only_scorable = st.checkbox(
+            "채점 대상만 보기",
+            value=True,
+            help=(
+                "실제 실행(generate-timeline · update-user-memory)만 남깁니다. 나머지 이름은 대상 서버의 "
+                "테스트 실행이 남긴 조각이라 채점해도 의미가 없습니다."
+            ),
+        )
+    traces = environments.keep(traces, envs)
     scored = scored_index()
     summaries = _selectable_rows(traces, only_scorable=only_scorable, scored=scored)
     if not summaries:
@@ -302,7 +308,8 @@ def render() -> None:
         },
         on_select="rerun",
         selection_mode="single-row",
-        key="tr_table",
+        # 선택은 행 위치로 돌아오므로 필터가 바뀌면 key 를 바꿔 옛 선택이 다른 행을 가리키지 않게 한다.
+        key=f"tr_table_{'-'.join(envs)}_{int(only_scorable)}",
     )
 
     summary = _picked_row(summaries, event.selection)
