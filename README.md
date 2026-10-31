@@ -24,6 +24,15 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    codex login status
    ```
 
+   Claude로 돌리려면(`LLM_PROVIDER=claude`) 대신 Claude Code CLI를 확인하고 Claude 계정으로
+   로그인합니다. 네이티브 설치(`claude.exe`) 기준으로 검증했습니다.
+
+   ```powershell
+   claude --version
+   claude auth login
+   claude auth status
+   ```
+
 3. `.env.example` 을 `.env` 로 복사하고 필요한 값을 채웁니다.
 
    | 변수 | 쓰임 |
@@ -32,9 +41,11 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    | `LANGFUSE_PROD_PUBLIC_KEY` / `LANGFUSE_PROD_SECRET_KEY` | 운영(prod) 프로젝트 로그 조회 |
    | `LANGFUSE_HOST` | 리전에 맞는 주소 (EU/US/JP/셀프호스트). 두 프로젝트 공통 |
    | `LANGFUSE_DEV_HOST` / `LANGFUSE_PROD_HOST` | 인스턴스가 서로 다를 때만. 비우면 `LANGFUSE_HOST` |
-   | `LLM_PROVIDER` | 모든 LLM 기능의 실행 방식. 기본 `codex`, 호환용 `openai-api` |
+   | `LLM_PROVIDER` | 모든 LLM 기능의 실행 방식. 기본 `codex`, Claude Code CLI는 `claude`, 호환용 `openai-api` |
    | `CODEX_MODEL` | Codex 모델. 비우면 Codex CLI 기본 모델 |
    | `CODEX_TIMEOUT_SECONDS` | Codex 실행 한 번의 제한 시간(기본 600초) |
+   | `CLAUDE_MODEL` | Claude 모델(`opus`·`sonnet` 같은 별칭이나 전체 이름). 비우면 Claude Code CLI 기본 모델 |
+   | `CLAUDE_TIMEOUT_SECONDS` | Claude Code 실행 한 번의 제한 시간(기본 600초) |
    | `OPENAI_API_KEY` | deprecated OpenAI API provider를 선택할 때만 필요 |
    | `OPENAI_JUDGE_MODEL` | deprecated OpenAI API provider가 쓸 모델(기본 `gpt-4o`) |
 
@@ -42,8 +53,9 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`)은 **dev 값으로 계속 읽으므로**, 쓰던 `.env` 를
    그대로 두고 `LANGFUSE_PROD_*` 두 줄만 더하면 됩니다.
 
-   키는 `.env` 에만 두고 커밋하지 않습니다. Codex 실패 시 OpenAI API로 자동 fallback하지
-   않으며 provider는 `LLM_PROVIDER`로만 명시적으로 바꿉니다.
+   키는 `.env` 에만 두고 커밋하지 않습니다. 한 provider가 실패해도 다른 provider로 자동
+   fallback하지 않으며 provider는 `LLM_PROVIDER`로만 명시적으로 바꿉니다. `.env`를 바꾼 뒤에는
+   앱을 다시 띄워야 반영됩니다.
 
 ### LLM 실행 방식
 
@@ -51,6 +63,18 @@ Task 채점, 프롬프트 개선 제안, 개선책 본문, 테스트 데이터 �
 `CodexProvider → codex exec`입니다. 각 호출은 이전 대화를 이어받지 않는 `--ephemeral` 실행이고,
 읽기 전용의 빈 임시 디렉터리에서 동작합니다. 지시와 입력은 stdin으로 전달합니다. 구조화 결과는
 기능별 Pydantic JSON Schema를 `--output-schema`로 강제하고 저장 전에 같은 모델로 다시 검증합니다.
+
+`LLM_PROVIDER=claude`이면 같은 기능이 모두 `ClaudeCodeProvider → claude -p`로 실행됩니다. 호출마다
+세션을 남기지 않고(`--no-session-persistence`) 빈 임시 디렉터리에서 내장 도구를 모두 끈 채
+(`--tools ""`) 실행하며, `--safe-mode`로 사용자 CLAUDE.md·hook·MCP·플러그인을 읽지 않습니다.
+시스템 프롬프트는 Claude Code 기본 프롬프트를 대체하고 파일(`--system-prompt-file`)로, 입력은
+stdin으로 전달합니다. 구조화 결과는 같은 JSON Schema를 `--json-schema`로 요청하고 결과
+envelope의 `structured_output`을 같은 Pydantic 모델로 다시 검증합니다.
+
+```dotenv
+LLM_PROVIDER=claude
+CLAUDE_MODEL=
+```
 
 상위 기능에는 OpenAI 직접 호출이 없지만, 기존 API 구현은 deprecated provider로 남아 있습니다.
 필요할 때만 `.env`에서 다음처럼 명시합니다.
