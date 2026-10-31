@@ -21,7 +21,7 @@
 | 채점 기준 | Rubric | judge가 결과를 평가하는 규칙. 정본은 메트릭 문서(`assets/rubrics/laimory-metric-v5.md`)이고, 단계마다 `judge-stage-<stageKey>` 로 버전이 쌓인다. |
 | 평가 대상 | Stage | 채점 단위가 되는 Agent 하나. 8개이며 각각 100점 만점이다(→ [단계별 채점](stage-evaluation.md)). |
 | 항목 | Rubric item | 평가 대상 안의 채점 항목. 문서의 배점을 그대로 쓰고, 항목마다 점수와 이유를 남긴다. |
-| LLM Provider | LLM Provider | 채점·프롬프트 개선·개선책·테스트 데이터 생성을 실행하는 공통 경계. 기본은 `CodexProvider`, deprecated 호환 구현은 `OpenAIApiProvider`다. 구조화 기능은 각 도메인의 Pydantic Schema를 쓴다. |
+| LLM Provider | LLM Provider | 채점·프롬프트 개선·개선책·테스트 데이터 생성을 실행하는 공통 경계. 기본은 `CodexProvider`, 선택 구현은 `ClaudeCodeProvider`(`LLM_PROVIDER=claude`), deprecated 호환 구현은 `OpenAIApiProvider`다. 구조화 기능은 각 도메인의 Pydantic Schema를 쓴다. |
 | 정량 Metric | Quantitative Metric | 점수 전에 입력 source와 최종 timeline을 대조해 계산하는 수치. 값·분자·분모·근거를 저장하며 계산 대상이 없으면 null이다. |
 | 점수 | Score | grounding·temporal·place·coverage·composition·writing·question과 overall을 나타내는 0~10 정수. Metric을 핵심 근거로 삼되 단순 비율 환산은 하지 않는다. |
 | 문제점 | Finding | 분석에서 식별한 품질 문제 하나. |

@@ -1,6 +1,7 @@
 """LLM-as-a-Judge 실행 provider.
 
-기본 provider는 ChatGPT 계정으로 인증된 로컬 Codex CLI다. OpenAI API 직접 호출 구현은 기존
+기본 provider는 ChatGPT 계정으로 인증된 로컬 Codex CLI다. Claude 계정으로 인증된 로컬 Claude Code
+CLI도 같은 계약으로 선택할 수 있다(`LLM_PROVIDER=claude`). OpenAI API 직접 호출 구현은 기존
 동작 호환을 위해 남기되 deprecated provider로만 명시적으로 선택할 수 있다.
 """
 
@@ -78,6 +79,22 @@ class CodexTimeout(JudgeProviderError):
     code = "CODEX_TIMEOUT"
 
 
+class ClaudeNotInstalled(JudgeProviderError):
+    code = "CLAUDE_NOT_INSTALLED"
+
+
+class ClaudeNotAuthenticated(JudgeProviderError):
+    code = "CLAUDE_NOT_AUTHENTICATED"
+
+
+class ClaudeExecutionFailed(JudgeProviderError):
+    code = "CLAUDE_EXECUTION_FAILED"
+
+
+class ClaudeTimeout(JudgeProviderError):
+    code = "CLAUDE_TIMEOUT"
+
+
 class InvalidJudgeOutput(JudgeProviderError):
     code = "INVALID_JUDGE_OUTPUT"
 
@@ -138,27 +155,30 @@ def _subprocess_options() -> dict:
     return {}
 
 
-def _short_error(text: str, *, limit: int = 1200) -> str:
+def _short_error(text: str, *, limit: int = 1200, cli: str = "Codex CLI") -> str:
     """CLI stderr를 사용자에게 필요한 길이만 남긴다."""
     compact = " ".join(text.strip().split())
     if not compact:
-        return "Codex CLI가 상세 오류를 반환하지 않았습니다."
+        return f"{cli}가 상세 오류를 반환하지 않았습니다."
     return compact if len(compact) <= limit else f"{compact[:limit]}…"
 
 
-def _looks_like_auth_error(text: str) -> bool:
+_AUTH_ERROR_MARKERS = (
+    "not logged in",
+    "not authenticated",
+    "authentication required",
+    "unauthorized",
+    "401",
+)
+_CODEX_LOGIN_MARKERS = ("codex login",)
+# Claude Code는 인증 실패를 "Invalid API key · Please run /login" 같은 문구로 알린다.
+# 다른 프로세스와 토큰 갱신이 겹친 일시 오류("Failed to refresh OAuth token…")는 인증 문제가 아니다.
+_CLAUDE_LOGIN_MARKERS = ("/login", "claude auth login", "invalid api key", "authentication_error")
+
+
+def _looks_like_auth_error(text: str, login_markers: tuple[str, ...] = _CODEX_LOGIN_MARKERS) -> bool:
     lowered = text.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "not logged in",
-            "not authenticated",
-            "authentication required",
-            "unauthorized",
-            "401",
-            "codex login",
-        )
-    )
+    return any(marker in lowered for marker in (*_AUTH_ERROR_MARKERS, *login_markers))
 
 
 class CodexProvider:
@@ -356,6 +376,205 @@ class CodexProvider:
 CodexJudgeProvider = CodexProvider
 
 
+def _claude_envelope(stdout: str) -> dict | None:
+    """`claude -p --output-format json`이 stdout에 남기는 결과 envelope를 읽는다."""
+    try:
+        payload = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+class ClaudeCodeProvider:
+    """`claude -p`와 저장된 Claude Code CLI 인증을 사용하는 LLM provider.
+
+    Codex provider와 같은 격리 원칙을 따른다. 매 호출은 임시 작업 디렉터리에서 세션을 남기지 않고
+    실행하고, 내장 도구를 모두 끄고, `--safe-mode`로 사용자 CLAUDE.md·hook·MCP·플러그인을 읽지
+    않는다. 시스템 프롬프트는 Claude Code 기본 프롬프트를 대체하며 Windows 명령줄 길이 제한을
+    피하려고 파일로 넘긴다. 구조화 출력은 `--json-schema`(인라인 JSON만 받음)로 요청하고
+    envelope의 `structured_output`을 Pydantic으로 재검증한다.
+    """
+
+    def __init__(self, *, model: str | None = None, timeout_seconds: int = 600) -> None:
+        self.model = model.strip() if model and model.strip() else None
+        self.timeout_seconds = timeout_seconds
+
+    @staticmethod
+    def executable() -> str | None:
+        """PATH에서 실제 실행할 Claude Code CLI 경로를 찾는다."""
+        return shutil.which("claude")
+
+    def _require_authenticated_cli(self) -> str:
+        executable = self.executable()
+        if executable is None:
+            raise ClaudeNotInstalled(
+                "Claude Code CLI를 찾을 수 없습니다. 설치 후 PowerShell에서 `claude --version`을 확인하세요."
+            )
+
+        try:
+            status = subprocess.run(
+                [executable, "auth", "status"],
+                text=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                check=False,
+                **_subprocess_options(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ClaudeTimeout(
+                "Claude Code CLI 인증 상태 확인이 시간 안에 끝나지 않았습니다. PowerShell에서 "
+                "`claude auth status`를 확인하세요."
+            ) from exc
+        except OSError as exc:
+            raise ClaudeExecutionFailed(f"Claude Code CLI를 실행하지 못했습니다: {exc}") from exc
+
+        # 출력은 계정 정보가 담긴 JSON이다. 로그인 여부만 읽고 나머지는 어디에도 남기지 않는다.
+        payload = _claude_envelope(status.stdout) or {}
+        if status.returncode != 0 or payload.get("loggedIn") is False:
+            raise ClaudeNotAuthenticated(
+                "Claude Code CLI가 인증되어 있지 않습니다. PowerShell에서 `claude auth login`을 실행하고 "
+                "Claude 계정으로 로그인하세요."
+            )
+        return executable
+
+    def _run(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        result_model: type[BaseModel] | None,
+    ) -> dict:
+        executable = self._require_authenticated_cli()
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="laimory-claude-llm-") as directory:
+                root = Path(directory)
+                system_prompt_path = root / "system_prompt.txt"
+                system_prompt_path.write_text(system_prompt, encoding="utf-8")
+
+                command = [
+                    executable,
+                    "-p",
+                    "--output-format",
+                    "json",
+                    "--no-session-persistence",
+                    "--safe-mode",
+                    "--tools",
+                    "",
+                    "--system-prompt-file",
+                    str(system_prompt_path),
+                ]
+                if result_model is not None:
+                    command.extend(
+                        [
+                            "--json-schema",
+                            json.dumps(
+                                _strict_json_schema(result_model),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        ]
+                    )
+                if self.model:
+                    command.extend(["--model", self.model])
+
+                completed = subprocess.run(
+                    command,
+                    input=user_prompt,
+                    text=True,
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=root,
+                    timeout=self.timeout_seconds,
+                    check=False,
+                    **_subprocess_options(),
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise ClaudeTimeout(
+                f"Claude Code CLI LLM 실행이 {self.timeout_seconds}초 안에 끝나지 않았습니다. "
+                "CLAUDE_TIMEOUT_SECONDS를 늘리거나 입력 크기를 확인하세요."
+            ) from exc
+        except OSError as exc:
+            raise ClaudeExecutionFailed(
+                f"Claude Code CLI 입력 파일 또는 프로세스 처리에 실패했습니다: {exc}"
+            ) from exc
+
+        # 실패해도 stdout에 envelope(is_error=true, result=오류 문구)가 오고 stderr는 비어 있다.
+        envelope = _claude_envelope(completed.stdout)
+        if completed.returncode != 0 or envelope is None or envelope.get("is_error"):
+            message = (envelope.get("result") or envelope.get("subtype")) if envelope else None
+            detail = _short_error(
+                message if isinstance(message, str) else completed.stderr or completed.stdout,
+                cli="Claude Code CLI",
+            )
+            if _looks_like_auth_error(detail, _CLAUDE_LOGIN_MARKERS):
+                raise ClaudeNotAuthenticated(
+                    "Claude Code CLI 인증이 만료되었거나 유효하지 않습니다. PowerShell에서 "
+                    "`claude auth login`을 실행한 뒤 다시 시도하세요."
+                )
+            raise ClaudeExecutionFailed(f"Claude Code CLI LLM 실행이 실패했습니다: {detail}")
+        return envelope
+
+    def generate_text(self, *, system_prompt: str, user_prompt: str) -> str:
+        """Claude의 최종 메시지를 일반 텍스트로 반환한다."""
+        output = self._run(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            result_model=None,
+        ).get("result")
+        if not isinstance(output, str) or not output.strip():
+            raise InvalidJudgeOutput("Claude Code CLI가 빈 최종 결과를 반환했습니다.")
+        return output.strip()
+
+    def generate_structured(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        result_model: type[JudgeResult],
+    ) -> JudgeResult:
+        """Claude structured output을 읽고 Pydantic으로 재검증한다."""
+        envelope = self._run(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            result_model=result_model,
+        )
+        payload = envelope.get("structured_output")
+        if payload is None:
+            raw_output = envelope.get("result")
+            try:
+                payload = json.loads(raw_output)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise InvalidJudgeOutput(
+                    "Claude Code CLI가 유효한 JSON 결과를 반환하지 않았습니다: "
+                    f"{_short_error(str(raw_output or ''), cli='Claude Code CLI')}"
+                ) from exc
+
+        try:
+            return result_model.model_validate(payload)
+        except ValidationError as exc:
+            raise JudgeSchemaValidationFailed(
+                f"Claude Code CLI 결과가 Evaluation Schema와 맞지 않습니다: {exc}"
+            ) from exc
+
+    def evaluate(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        result_model: type[JudgeResult],
+    ) -> JudgeResult:
+        """Judge 호출 호환용 별칭."""
+        return self.generate_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            result_model=result_model,
+        )
+
+
 class OpenAIApiProvider:
     """Deprecated: OpenAI API를 직접 호출하는 기존 LLM provider."""
 
@@ -460,6 +679,11 @@ def get_llm_provider() -> LlmProvider:
             model=settings.codex_model,
             timeout_seconds=settings.codex_timeout_seconds,
         )
+    if settings.llm_provider == "claude":
+        return ClaudeCodeProvider(
+            model=settings.claude_model,
+            timeout_seconds=settings.claude_timeout_seconds,
+        )
     return OpenAIApiProvider(model=settings.openai_judge_model)
 
 
@@ -474,6 +698,9 @@ def llm_provider_label() -> str:
     if settings.llm_provider == "codex":
         model = settings.codex_model.strip() if settings.codex_model else ""
         return f"Codex CLI · {model}" if model else "Codex CLI · CLI 기본 모델"
+    if settings.llm_provider == "claude":
+        model = settings.claude_model.strip() if settings.claude_model else ""
+        return f"Claude Code CLI · {model}" if model else "Claude Code CLI · CLI 기본 모델"
     return f"OpenAI API (deprecated) · {settings.openai_judge_model}"
 
 
@@ -482,6 +709,8 @@ def llm_setup_error() -> str | None:
     settings = get_settings()
     if settings.llm_provider == "codex" and CodexProvider.executable() is None:
         return "Codex CLI를 찾을 수 없습니다. 설치 후 `codex login`으로 ChatGPT 계정에 로그인하세요."
+    if settings.llm_provider == "claude" and ClaudeCodeProvider.executable() is None:
+        return "Claude Code CLI를 찾을 수 없습니다. 설치 후 `claude auth login`으로 Claude 계정에 로그인하세요."
     if settings.llm_provider == "openai-api" and not settings.has_openai_credentials():
         return "OpenAI API provider를 사용하려면 .env에 OPENAI_API_KEY가 필요합니다."
     return None
