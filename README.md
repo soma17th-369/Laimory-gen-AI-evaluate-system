@@ -48,6 +48,9 @@ Laimory 에서 쓰이는 생성형 AI 의 품질을 측정하고 개선하기 �
    | `CLAUDE_TIMEOUT_SECONDS` | Claude Code 실행 한 번의 제한 시간(기본 600초) |
    | `OPENAI_API_KEY` | deprecated OpenAI API provider를 선택할 때만 필요 |
    | `OPENAI_JUDGE_MODEL` | deprecated OpenAI API provider가 쓸 모델(기본 `gpt-4o`) |
+   | `TIMELINE_TEST_URL` | Dev 환경 테스트가 부를 dev 서버 주소(`…/t/api/{applicationVersion}/timeline/test` 전체) |
+   | `TIMELINE_TEST_ACCESS_TOKEN` | 넣으면 `Authorization: Bearer` 헤더로 보냄. 비우면 헤더 없이 보냄 |
+   | `TIMELINE_TEST_TIMEOUT_SECONDS` | 테스트 호출 한 번의 제한 시간(기본 180초. 서버가 AI 를 최대 150초 기다림) |
 
    키가 있는 프로젝트만 수집합니다. 접두사 없는 예전 이름
    (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`)은 **dev 값으로 계속 읽으므로**, 쓰던 `.env` 를
@@ -123,6 +126,7 @@ LangFuse 프로젝트가 개발·운영으로 나뉘어 있어도 **화면은 �
 | 개선책 | 채점 결과에서 프롬프트 개선 방향 도출. 반영 여부·시기도 여기서 관리 |
 | 개선 history | 반영된 개선책을 시간 순으로 놓고 반영 전후의 점수·비용·토큰·모델 변화 비교 |
 | 테스트 데이터 | 개선책 또는 실제 로그 input 으로 테스트 스위트 생성 |
+| Dev 환경 테스트 | dev 서버의 타임라인 AI 테스트 엔드포인트에 입력(예시 또는 수집된 dev 트레이스의 원본)을 보내 결과를 바로 확인. 실행마다 요청·응답을 기록 |
 | 채점 기준 설정 | 평가 대상별 채점 항목·배점·확인 기준 편집(Task 리뷰의 각 단계에서도 같은 표를 고칠 수 있음) |
 
 ## 로그 수집 방식
@@ -150,7 +154,8 @@ data/
 ├── rubrics/<stageKey>.json    # 화면에서 고친 채점 항목(없으면 메트릭 문서 기본값)
 ├── prompts/<이름>/v<n>.json  # 채점에 실제로 쓴 기준 본문 기록
 ├── improvements/
-└── testdata/
+├── testdata/
+└── dev-test/<runId>.json   # Dev 환경 테스트 실행 기록(요청·응답, 토큰은 남기지 않음)
 ```
 
 환경으로 폴더를 나누지 않습니다. 어느 프로젝트에서 왔는지는 행·레코드의 `env` 값이 들고 있고,
