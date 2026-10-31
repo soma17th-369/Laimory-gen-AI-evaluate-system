@@ -73,7 +73,7 @@ def _status_table(states: dict[str, dict], counts: dict[str, int], configured: l
 
 
 def render() -> None:
-    st.title("📥 LangFuse 로그 수집")
+    st.title("LangFuse 로그 수집")
     st.caption("여기서 쌓은 로그를 대시보드·Task 리뷰·테스트 데이터 페이지가 함께 사용합니다.")
     st.info(
         "저장된 로그는 지우지 않고 계속 쌓입니다. 처음에는 LangFuse에 쌓인 로그를 전부 받아오고, "

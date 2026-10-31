@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.analysis import evaluation_record
 from app.analysis.providers import get_llm_provider
-from app.analysis.schema import CRITERION_LABELS, TraceScorecard
 from app.improve.schema import PromptReview
 
 _GENERATION = "GENERATION"
@@ -58,14 +58,6 @@ _SYSTEM_PROMPT = """\
 """
 
 
-def _findings_text(scorecard: TraceScorecard) -> str:
-    lines = [f"- 종합 {scorecard.overall.score}/10: {scorecard.summary}"]
-    for finding in scorecard.findings:
-        label = CRITERION_LABELS.get(finding.criterion, finding.criterion)
-        lines.append(f"- [{finding.severity}] ({label}) {finding.description}")
-    return "\n".join(lines)
-
-
 def _prompts_text(prompts: list[dict]) -> str:
     blocks = []
     for p in prompts:
@@ -74,12 +66,12 @@ def _prompts_text(prompts: list[dict]) -> str:
     return "\n\n".join(blocks) or "(프롬프트 없음)"
 
 
-def suggest_prompt_improvements(trace_detail: Any, scorecard: TraceScorecard) -> PromptReview:
-    """트레이스의 프롬프트 + 채점 문제점 → 단계별 개선 제안."""
+def suggest_prompt_improvements(trace_detail: Any, record: dict) -> PromptReview:
+    """트레이스의 프롬프트 + 단계별 감점 근거 → 단계별 개선 제안."""
     prompts = collect_generation_prompts(trace_detail)
     user = (
-        "[채점 문제점]\n"
-        f"{_findings_text(scorecard)}\n\n"
+        "[채점 문제점 — 평가 대상별]\n"
+        f"{evaluation_record.findings_text(record)}\n\n"
         "[파이프라인 단계별 실제 프롬프트]\n"
         f"{_prompts_text(prompts)}\n\n"
         "위 문제점을 줄이기 위한 단계별 프롬프트 수정안을 제안하라."

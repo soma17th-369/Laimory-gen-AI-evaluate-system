@@ -1,35 +1,58 @@
-"""리포트 조립 (M3). 채점된 항목들을 모아 집계까지 계산한다."""
+"""리포트 조립. 단계별 채점 결과를 모아 평가 대상별 평균까지 계산한다."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from statistics import mean
+from typing import Any
 
-from app.analysis.schema import CRITERION_KEYS
+from app.analysis import evaluation_record, stages
 from app.report.schema import Report, ReportItem, ReportSummary
 
 _SEVERITIES = ("HIGH", "MEDIUM", "LOW")
 
 
+def item_of(record: dict[str, Any], *, timestamp: str | None = None) -> ReportItem:
+    """채점 결과 레코드 하나 → 리포트 항목."""
+    return ReportItem(
+        task_id=str(record.get("taskId") or "unknown"),
+        trace_id=record.get("traceId"),
+        name=record.get("traceName") or record.get("name"),
+        timestamp=timestamp or record.get("updatedAt"),
+        composite=evaluation_record.composite_score(record),
+        record=record,
+    )
+
+
 def _summarize(items: list[ReportItem]) -> ReportSummary:
     if not items:
-        return ReportSummary(trace_count=0)
+        return ReportSummary(task_count=0)
 
-    overalls = [it.scorecard.overall.score for it in items]
-    avg_by_criterion = {
-        key: round(mean(getattr(it.scorecard.scores, key).score for it in items), 2)
-        for key in CRITERION_KEYS
-    }
-    by_severity = {sev: 0 for sev in _SEVERITIES}
-    for it in items:
-        for finding in it.scorecard.findings:
-            by_severity[finding.severity] = by_severity.get(finding.severity, 0) + 1
+    composites = [item.composite for item in items if item.composite is not None]
+    per_stage: dict[str, list[float]] = {}
+    by_severity = {severity: 0 for severity in _SEVERITIES}
+    by_kind: dict[str, int] = {}
+    for item in items:
+        for key, entry in (item.record.get("stages") or {}).items():
+            card = entry.get("scorecard") or {}
+            if isinstance(card.get("total"), (int, float)):
+                per_stage.setdefault(key, []).append(float(card["total"]))
+            for deduction in card.get("deductions") or []:
+                severity = str(deduction.get("severity"))
+                by_severity[severity] = by_severity.get(severity, 0) + 1
+            for alert in card.get("alerts") or []:
+                kind = str(alert.get("kind"))
+                by_kind[kind] = by_kind.get(kind, 0) + 1
 
     return ReportSummary(
-        trace_count=len(items),
-        avg_overall=round(mean(overalls), 2),
-        avg_by_criterion=avg_by_criterion,
-        findings_by_severity=by_severity,
+        task_count=len(items),
+        avg_composite=round(mean(composites), 1) if composites else None,
+        avg_by_stage={
+            key: round(mean(values), 1)
+            for key, values in sorted(per_stage.items(), key=lambda pair: stages.STAGE_KEYS.index(pair[0]))
+        },
+        deductions_by_severity=by_severity,
+        alerts_by_kind=by_kind,
     )
 
 

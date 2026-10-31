@@ -1,0 +1,947 @@
+{
+  "generatedAt": "2026-09-10T00:31:01.550228+09:00",
+  "providerLabelNow": "Codex CLI · CLI 기본 모델",
+  "stages": [
+    {
+      "key": "event-location",
+      "label": "Location Event Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "output_format",
+          "label": "출력 형식",
+          "points": 5,
+          "checks": [
+            "지정된 JSON 구조와 필드 의미를 지켰는가?"
+          ]
+        },
+        {
+          "key": "time_format",
+          "label": "시간 형식",
+          "points": 5,
+          "checks": [
+            "출력 시간이 입력과 일치하고 KST 의미를 유지하는가?"
+          ]
+        },
+        {
+          "key": "window",
+          "label": "Window 준수",
+          "points": 5,
+          "checks": [
+            "입력 window 밖의 사건을 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_match",
+          "label": "Source 일치",
+          "points": 5,
+          "checks": [
+            "출력의 사람·장소·활동·시간이 참조한 입력 source에서 확인되는가?"
+          ]
+        },
+        {
+          "key": "movement_flow",
+          "label": "이동 흐름",
+          "points": 20,
+          "checks": [
+            "여러 MOVEMENT 사이에 20분 이하의 STAY만 있으면 하나의 이동 candidate로 묶었는가?",
+            "장거리 이동은 출발지와 최종 도착지를 중심으로 표현했는가?",
+            "마지막 MOVEMENT 종료 후 30분 안에 추가 MOVEMENT가 없으면 해당 이동 묶음을 종료했는가?",
+            "MOVEMENT 사이의 STAY가 20분을 초과하거나 MOVEMENT 사이 간격이 30분을 초과하면 서로 다른 이동 candidate로 분리했는가?"
+          ]
+        },
+        {
+          "key": "stay_merge",
+          "label": "체류 병합과 제외",
+          "points": 15,
+          "checks": [
+            "MOVEMENT 없이 이어지고 places 또는 address가 같은 STAY를 합쳤는가?",
+            "20분 이하 STAY의 시작 10분 전과 종료 10분 후에 MOVEMENT가 모두 있을때 독립  STAY candidate가 생기면 안된다.",
+            "20분 이하 STAY라도 앞 뒤 10분 안에 MOVEMENT가 없거나 정규화한 place·address가 같은 STAY가 2회 이상 나타나면 이들을 합쳐 candidate 로 만들었는가?",
+            "앞 MOVEMENT의 도착지와 뒤 MOVEMENT의 출발지가 같고 두 이동의 간격이 30분 이상인 경우 체류로 만들었는가?"
+          ]
+        },
+        {
+          "key": "transport_walk",
+          "label": "이동수단과 산책 추론",
+          "points": 10,
+          "checks": [
+            "정규화한 출발지와 도착지가 비슷하고 코드의 속도 구간이 도보에 해당하면 산책이고 EXERCISE로 분류했는가?",
+            "코드의 차량 속도 구간에 해당하는 이동을 EXERCISE로 분류하지 않았는가?",
+            "이동 거리·시간이 GPS 오차로 잘못 수집된 기준 이하인 기록을 candidate로 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "place_activity",
+          "label": "장소·주소와 활동 추론",
+          "points": 15,
+          "checks": [
+            "출력 address가 입력 address와 문자열로 일치하고, places가 하나이면 그 값을 사용하며 둘 이상이면 임의로 하나를 선택하지 않았는가?",
+            "근거 없이 집·학교·회사로 단정하지 않았는가?",
+            "위치만으로 식사·대화·업무 같은 활동 목적을 확정하지 않았는가?",
+            "관측 마지막 시각 이후나 window 밖을 계속 추론하지 않았는가?"
+          ]
+        },
+        {
+          "key": "title_description",
+          "label": "제목·설명·불확실성",
+          "points": 10,
+          "checks": [
+            "이동 문장에는 입력에서 확인되는 출발지와 도착지를 언급하고 출발지에서 도착지로 `갔다`, 체류 문장에는 체류했다 하지 않고 장소와 `시간을 보냈다`는 표현을, 산책 문장에는 장소와 `산책했다`는 표현을 포함했는가?",
+            "이동수단은 source 필드에 직접 기록됐거나 코드의 속도 구간 규칙과 일치할 때만 title·description에 포함했는가?",
+            "title·description에 `GPS`, `센서`, `메타데이터`, `candidate`, `fragment`, `추론`, `관측 공백`, `데이터 공백`을 포함하지 않고, 해당 내용이 필요하면 uncertainty에 기록했는가?"
+          ]
+        },
+        {
+          "key": "source_accounting",
+          "label": "Source 전체 처리",
+          "points": 10,
+          "checks": [
+            " `window 밖`, `20분 이하이며 전후 10분 안에 MOVEMENT 존재`, `중복 rawId`, `parse 실패` 등이 아닌 모든 MOVEMENT와 STAY rawId가 candidate 또는 fragment에 포함됐는가?"
+          ]
+        }
+      ],
+      "promptSha256": "9d1ed2704e310ec1ea27e1c2b2ac718386822bf310c3f89b9c828324d7b64b60",
+      "promptChars": 10253
+    },
+    {
+      "key": "event-calendar",
+      "label": "Calendar Event Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "output_format",
+          "label": "출력 형식",
+          "points": 5,
+          "checks": [
+            "지정된 JSON 구조와 필드 의미를 지켰는가?"
+          ]
+        },
+        {
+          "key": "time_format",
+          "label": "시간 형식",
+          "points": 5,
+          "checks": [
+            "출력 시간이 입력과 일치하고 KST 의미를 유지하는가?"
+          ]
+        },
+        {
+          "key": "window",
+          "label": "Window 준수",
+          "points": 5,
+          "checks": [
+            "입력 window 밖의 사건을 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_match",
+          "label": "Source 일치",
+          "points": 5,
+          "checks": [
+            "출력의 사람·장소·활동·시간이 참조한 입력 source에서 확인되는가?"
+          ]
+        },
+        {
+          "key": "schedule_coverage",
+          "label": "일정 반영",
+          "points": 20,
+          "checks": [
+            "모든 Calendar rawId를 candidate·fragment에 포함했는가?"
+          ]
+        },
+        {
+          "key": "title_time",
+          "label": "제목과 시간",
+          "points": 15,
+          "checks": [
+            "Calendar title과 startAt·endAt을 candidate·fragment에 동일한 값으로 보존했는가?"
+          ]
+        },
+        {
+          "key": "event_type_tags",
+          "label": "EventType과 의미 태그",
+          "points": 20,
+          "checks": [
+            "event의 활동을 적절한 EventType 정의와 대조하고, title·description에 있는 활동·장소·사람을 의미 태그에 반영했는가?"
+          ]
+        },
+        {
+          "key": "place",
+          "label": "장소",
+          "points": 10,
+          "checks": [
+            "locationText를 places에 반영하고 URL을 장소로 사용하지 않았는가?"
+          ]
+        },
+        {
+          "key": "all_day",
+          "label": "종일 일정",
+          "points": 10,
+          "checks": [
+            "all-day flag를 보존하고 window 의 startAt, endAt 과 동일한 startAt, endAt 을 설정했으며 description 에 `오늘은 하루종일` 이라는 내용을 넣었는가?"
+          ]
+        },
+        {
+          "key": "required_fields",
+          "label": "필수 필드",
+          "points": 5,
+          "checks": [
+            "각 일정에 title·startAt·endAt·rawId를 포함하고, 입력에 참석자가 있으면 해당 참석자를 포함했는가?"
+          ]
+        }
+      ],
+      "promptSha256": "c65fccf794e926a52f809689cd8ddf5e6a5dcac5ae56cf14cf8fbce3a1f648b6",
+      "promptChars": 8192
+    },
+    {
+      "key": "event-notification",
+      "label": "Notification Event Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "output_format",
+          "label": "출력 형식",
+          "points": 5,
+          "checks": [
+            "지정된 JSON 구조와 필드 의미를 지켰는가?"
+          ]
+        },
+        {
+          "key": "time_format",
+          "label": "시간 형식",
+          "points": 5,
+          "checks": [
+            "출력 시간이 입력과 일치하고 KST 의미를 유지하는가?"
+          ]
+        },
+        {
+          "key": "window",
+          "label": "Window 준수",
+          "points": 5,
+          "checks": [
+            "입력 window 밖의 사건을 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_match",
+          "label": "Source 일치",
+          "points": 5,
+          "checks": [
+            "출력의 사람·장소·활동·시간이 참조한 입력 source에서 확인되는가?"
+          ]
+        },
+        {
+          "key": "type_judgement",
+          "label": "알림 정보 유형 판단",
+          "points": 15,
+          "checks": [
+            "앱 이름만으로 판단하지 않고 대화, 결제·송금, 예약, 저우선순위 알림으로 내용을 구분했는가?",
+            "메신저 알림의 경우 앱과 송신자·내용의 맥락을 함께 보고 SOCIAL과 WORK 등을 구분했는가? ex) 카카오톡과 인스타그램은 SOCIAL, webex, discord, slack 등은 내용을 확인하고 WORK"
+          ]
+        },
+        {
+          "key": "messenger",
+          "label": "메신저",
+          "points": 20,
+          "checks": [
+            "수신 알림을 사용자가 한 말로 착각하지 않았는가?",
+            "송신자 이름을 임의로 바꾸거나 관계를 만들어내지 않았는가?",
+            "수신만으로 답장이나 양방향 대화를 확정하지 않았는가?",
+            "해당 채팅방의 이름, 대상을 보고 몇 명이랑 대화했는지, 사적인 대화인지, 정보성 대화인지, 업무성 대화인지 구분을 잘 했는가?",
+            "메신저 기반 SOCIAL candidate를 하루 최대 3개로 제한했는가?"
+          ]
+        },
+        {
+          "key": "payment",
+          "label": "결제·송금",
+          "points": 15,
+          "checks": [
+            "결제 알림에 음식점 상호가 있고 결제 시각이 식사 시간대 정책에 포함될 때만 MEAL로 분류했는가?",
+            "편의점·매장 결제를 SHOPPING으로 해석할 근거가 있는가?",
+            "결제와 메신저 알림의 메시지가 이어지는 경우에만 정산 맥락을 사용했는가?",
+            "결제 알림에 목적을 나타내는 상품·서비스·상호 정보가 없으면 식사·쇼핑·정산 목적을 title·description에 추가하지 않았는가?"
+          ]
+        },
+        {
+          "key": "reservation",
+          "label": "예약",
+          "points": 15,
+          "checks": [
+            "다른 날짜의 예약 알림을 오늘 방문·참석으로 착각하지 않았는가?",
+            "알림의 `예약 생성`, `예약 변경`, `예약 취소` 문구를 방문 완료로 표현하지 않았는가?",
+            "예약 알림의 업종·서비스가 EventType 정의와 일치하는 event에만 sourceRef로 추가하고, 예약 알림만 있으면 수행 완료를 표현하지 않았는가?",
+            "예약 알림에 명시된 시간이 오늘이면 cadidate 를 만들었으며 그 시간이 일치하는가?"
+          ]
+        },
+        {
+          "key": "noise_privacy",
+          "label": "Noise와 개인정보",
+          "points": 10,
+          "checks": [
+            "다운로드·로그인·보안·일반 콘텐츠 알림만을 근거로 독립 candidate를 만들지 않았는가?",
+            "인증정보·전화번호·계좌번호 등 민감정보를 노출하지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_preservation",
+          "label": "Source 보존",
+          "points": 5,
+          "checks": [
+            "candidate·fragment에 적힌 송신자·결제·예약·대화 내용이 참조한 Notification의 sender·text·app·timestamp에서 확인되는가?"
+          ]
+        }
+      ],
+      "promptSha256": "542782e624ba8df1075707023acd05e229325933a40f68590fb32f9885d98449",
+      "promptChars": 9533
+    },
+    {
+      "key": "event-photo",
+      "label": "Photo Event Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "output_format",
+          "label": "출력 형식",
+          "points": 5,
+          "checks": [
+            "지정된 JSON 구조와 필드 의미를 지켰는가?"
+          ]
+        },
+        {
+          "key": "time_format",
+          "label": "시간 형식",
+          "points": 5,
+          "checks": [
+            "출력 시간이 입력과 일치하고 KST 의미를 유지하는가?"
+          ]
+        },
+        {
+          "key": "window",
+          "label": "Window 준수",
+          "points": 5,
+          "checks": [
+            "입력 window 밖의 사건을 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_match",
+          "label": "Source 일치",
+          "points": 5,
+          "checks": [
+            "출력의 사람·장소·활동·시간이 참조한 입력 source에서 확인되는가?"
+          ]
+        },
+        {
+          "key": "photo_description",
+          "label": "사진 묘사",
+          "points": 25,
+          "checks": [
+            "vision 결과에 장소 유형·피사체·상황 단서·상호·시설명·행동·표정·소지품이 있으면 해당 항목을 빠짐없이 반영하고, vision 결과에 없는 항목은 추가하지 않았는가?"
+          ]
+        },
+        {
+          "key": "beyond_vision",
+          "label": "Vision 결과 밖 주장",
+          "points": 15,
+          "checks": [
+            "이미지에서 확인되지 않는 사람·장소·행동·감정·목적을 추가하지 않았는가?"
+          ]
+        },
+        {
+          "key": "photo_coverage",
+          "label": "사진 반영",
+          "points": 20,
+          "checks": [
+            "rawId와 촬영 시각을 읽었고 vision 처리되어 description이 존재하는 사진을 모두 candidate에 포함했는가?"
+          ]
+        },
+        {
+          "key": "cluster_merge",
+          "label": "사진 cluster 병합",
+          "points": 15,
+          "checks": [
+            "description 이 유사하고 촬영 시간 차이가 10분 이하인 사진을 같은 candidate로 묶었는가?"
+          ]
+        },
+        {
+          "key": "source_preservation",
+          "label": "Source 보존",
+          "points": 5,
+          "checks": [
+            "묶인 사진의 모든 rawId를 보존했는가?"
+          ]
+        }
+      ],
+      "promptSha256": "ad261cc855d1d33afa3705c923dff6612c6b6b15a0a14c176973bba4305c3ec8",
+      "promptChars": 7854
+    },
+    {
+      "key": "timeline",
+      "label": "Timeline Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "title_description",
+          "label": "Event의 제목과 Description",
+          "points": 15,
+          "checks": [
+            "title과 descriptoin이 사용자가 자신의 하루를 기록한 것 같은 1인칭 주인공 시점, 해요체 과거형인가?",
+            "title과 descriptoin이 단순히 언제 어디에 갔는 지 보고하는 게 아니라 참고할만한 다른 candidate 를 통해 무엇을 했는 지에 대해 적절히 연결했는가?",
+            "title과 descriptoin이 관찰자·Agent 시점, 추정 표현과 내부 분석 과정을 노출하지 않았는가?",
+            "title과 descriptoin 에 어디서, 무엇을 했는 지 내용이 들어가 있는가?",
+            "title과 descriptoin이 source에 시간·장소·활동 값이 있으면 description에 해당 시간대·장소·활동을 각각 포함했는가?",
+            "모르는 사실은 제외하고 uncertainty로 분리했는가?",
+            "description이 직접 복사 문장에 해당하지 않는가?",
+            "title이 30자 이하의 명사구이고 source의 활동명 또는 장소명 중 하나 이상을 포함하는가?"
+          ]
+        },
+        {
+          "key": "day_flow",
+          "label": "하루 흐름과 필수 반영 사건",
+          "points": 15,
+          "checks": [
+            "단순한 사건의 나열이 아니라 전체적인 내용이 사람의 자연스러운 하루를 기록한 내용인가? (자연스러운 하루란? 집이던 숙소에서 하루를 시작하여 어딘가 이동해서 여러 활동들을 하거나 집에서 시간을 보내다가 다시 집이나 숙소로 들어오거나 계속 있었거나 해서 하루를 끝낸다.)",
+            "timestamp가 가장 이른 사건, 모든 MOVEMENT 묶음과 도착지, 모든 Calendar·Photo 사건, timestamp가 가장 늦은 사건을 반영했는가?",
+            "필수 반영 해야할 캘린더, 사진들을 모두 event 또는 warning에 모두 연결했는가?",
+            "입력에 없는 사건을 새로 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "event_merge",
+          "label": "Candidate·Fragment 병합",
+          "points": 25,
+          "checks": [
+            "이벤트 병합이 이벤트 병합 조건을 만족했는가?\n\t- 서로 시간 범위가 겹쳐야 한다. (포함하거나 일부분 겹치는 경우 포함)\n\t- 위치는 전체 타임라인의 중요한 뼈대가 되며 이를 보충할 다른 근거가 없다면 독립적으로 Event 가 될 수 있다.\n\t- 위치의 places 에서 해당 Event 와 가장 적절한 장소명을 골랐는가?\n\t- 사진은 중요한 사건을 표현하며 누락되어서는 안되고 이는 위치 정보가 무조건 뒷받침되어야 한다.\n\t- 캘린더 일정 또한 중요 병합 기준으로 보며, 캘린더 일정과 시간대가 맞고 내용이 해당 일정의 근거가 되는 사진, 위치, 알림과 같이 병합되어야한다.\n\t- 알림은 메신저 알림의 경우 대화의 내용이 친목, 사적이라고 판단되면 다른 정보들과 독립적으로 SOCIAL 이벤트를 만들 수 있다.\n\t- 알림은 메신저 알림의 경우 대화의 내용이 캘린더 일정, 사진, 위치 등 다른 이벤트와 관련이 있다면 해당 이벤트의 내용을 보충하는 근거가 된다.",
+            "시간만 겹치고 장소·활동 내용·사람이 모두 다른 항목을 별도 event로 분리했는가?",
+            "특정 event 에 중간 이동, 새 일정, 다른 장소·사진·활동이 있어 서로 다른 event 인데 무리하게 이를 합치지 않고 event를 나눴는가?",
+            "sourceRefs와 각 reason을 보존했는가?",
+            "candidate 를 우선 근거로 활용하고 부족하거나 필요한 부분에 fragment를 이용하여 완성된 event 를 보충했는가?",
+            "fragment의 사람·장소·활동·시간 중 하나 이상이 event의 같은 field와 일치할 때만 해당 event의 sourceRefs에 포함했는가?",
+            "시간만 겹치고 사람·장소·활동이 모두 다른 fragment를 event에 연결하지 않았는가?",
+            "fragment만으로 독립 event를 만든 경우 동일 사건 조건을 만족하는 fragment가 2개 이상 존재하는가?",
+            "다운로드·보안·일반 콘텐츠 알림 fragment만으로 독립 event를 만들지 않았는가?"
+          ]
+        },
+        {
+          "key": "source_final",
+          "label": "Source별 최종 반영",
+          "points": 12,
+          "checks": [
+            "하루의 주요 위치 이동을 설명하는 Location candidate 의 주요 cadidate 들을 전부 반영했으며 그 위치 이동이 이어지는 가?",
+            "모든 calendar rawId 가 1개만 존재하는가?",
+            "calendar 의 cadidiate 를 모두 반영했으며 해당 내용과 연관이 있는 것으로 보이는 위치, 사진, 알림 등의 정보와 모두 연결했는가?",
+            "모든 photo candidate 가 최종 결과에 반영되었는가?",
+            "모든 photo rawId 가 정확히 1개만 존재하는가?",
+            "Photo와 동일 사건 조건을 만족하는 event에 병합했는가?",
+            "Photo와 동일 사건 조건을 만족하는 다른 candidate가 없을 때만 독립 PHOTO_MOMENT를 만들었는가?",
+            "예약·결제 알림 외에 해당 되는 일정으로 보이는 위치 정보, 사진, 캘린더 등의 candidate가 없으면 방문·행동 완료 event를 만들지 않았는가?",
+            "대화, 결제, 예약이 아닌 알림과 민감정보를 배제했는가?"
+          ]
+        },
+        {
+          "key": "event_type",
+          "label": "EventType",
+          "points": 8,
+          "checks": [
+            "최종 event의 eventType이 EventType 정의와 대조해 일치하는 타입을 선택했는가?",
+            "선택한 eventType의 활동을 확인할 source field가 없으면 `UNKNOWN` 또는 해당 source의 기본 eventType을 사용했는가?"
+          ]
+        },
+        {
+          "key": "time",
+          "label": "시간",
+          "points": 8,
+          "checks": [
+            "모든 event의 startAt 과 endAt이 window 의  startTime·endTime 사이에 있는가? 벗어나지는 않았는가?",
+            "Calendar startAt·endAt이 window의 startTime·endTime과",
+            "MOVEMENT 시작·종료 시각을 출력에 같은 값으로 유지했는가?",
+            "여러 candidate를 병합하면 병합 대상의 가장 이른 startTime과 가장 늦은 endTime을 event 시간으로 사용했는가?",
+            "모든 Event 의 eventType 별 최소, 최대 시간이 지켜졌는가?"
+          ]
+        },
+        {
+          "key": "place",
+          "label": "장소와 주소",
+          "points": 5,
+          "checks": [
+            "Event 의 연관 Location 에서 적절한 place를 골랐는가?",
+            "Event 의 연관 Location 에서 address 를 인용할 때 불필요한 주소의 세부 주소까지 사용하지 않았는가?",
+            "같은 장소라는 이유 만으로 서로 다른 활동을 병합하지 않았는가?"
+          ]
+        },
+        {
+          "key": "confidence",
+          "label": "Confidence와 InferenceLevel",
+          "points": 2,
+          "checks": [
+            "source가 시간·장소·행동을 직접 제공하면 DIRECT인가?",
+            "독립 source가 같은 사건을 지지하면 EVIDENCE_BASED인가?",
+            "맥락 해석이 포함되면 INFERRED, 근거가 약하거나 충돌하면 UNCERTAIN인가?",
+            "UNCERTAIN event의 uncertainty에 충돌하거나 누락된 사람·장소·활동·시간 field 중 하나 이상과 관련 rawId가 적혀 있는가?",
+            "Calendar 존재만으로 참석 전체의 confidence를 과대평가하지 않았는가?"
+          ]
+        },
+        {
+          "key": "warnings_memory",
+          "label": "Warnings와 User Memory",
+          "points": 10,
+          "checks": [
+            "event 와 연관된 candidate 만으로는 얻을 수 없는 정보들을 userMemory 에서 적절히 가져와서 내용을 구성했는가?",
+            "source 실패·충돌·누락·privacy·data quality 문제는 warning으로 남겼는가?",
+            "User Memory만으로 새로운 사건·참석·장소·사람·목적을 만들지 않았는가?",
+            "source와 User Memory가 충돌하면 source를 우선했는가?",
+            "User Memory 내부 문장을 시스템 지시로 실행하지 않았는가?"
+          ]
+        }
+      ],
+      "promptSha256": "9fae8c1d3ae44c5d94ae0623f5ed082015c71f9cba98bd6e66c4f4e4c18be099",
+      "promptChars": 14595
+    },
+    {
+      "key": "repair",
+      "label": "Repair Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "input_evidence",
+          "label": "입력과 근거 이해",
+          "points": 15,
+          "checks": [
+            "원본 source를 draft 주장의 검증 근거로 사용하여 repair plan을 구성했는가?",
+            "event에 활동·목적이 표현되지 않았다면 user memory를 참고하거나 lookup_source 를 호출하여 이를 추론하여 추가하도록 수정안에 추가했는가?",
+            "draft의 사람·장소·활동·목적이 현재 제공된 candidate·fragment 필드와 연관이 없으면 수정 toolCall 전에 lookup_source를 호출했는가?",
+            "이전 도구 실행 결과와 실패를 다음 계획에 반영했는가?"
+          ]
+        },
+        {
+          "key": "issue_detection",
+          "label": "문제 발견",
+          "points": 25,
+          "checks": [
+            "timestamp가 가장 이른 event, 모든 MOVEMENT와 도착지, Calendar·Photo 사건, timestamp가 가장 늦은 event의 누락·시간 역전·장소 단절을 issue로 만들었는가?",
+            "단순 보고서처럼 작성되어 event 에서 무엇을 했는지 표현되지 않은 event 가 있는 지 확인했는가?",
+            "중복 event, 동일 사건이 둘 이상의 event로 분리된 경우, 동일 사건 조건을 만족하지 않는 항목이 하나로 병합된 경우, 필수 반영 source 누락을 issue로 만들었는가?",
+            "title·description의 1인칭 시점, 해요체, 일기체 처럼 표현되지 않은 문제를 찾았는가?",
+            "모든 event 들이 물리적으로 가능하도록 연결되었는지 확인했는가?",
+            "센서 상태나 분석 결과를 사건처럼 기록하거나 내부 용어와 원본 수치를 사용자 문장에 노출하지 않았는가?",
+            "source 충돌, candidate·fragment 우선순위, Calendar·Photo 보존 문제를 찾았는가?",
+            "시간: 이벤트 시간이 원본 근거와 일치하며 역전·겹침·범위 이탈·과도한 지속시간이 없는가?",
+            "장소: 이벤트의 장소와 주소가 원본 근거와 일치하는가?",
+            "`rawId`: `sourceRefs`의 `rawId`와 `sourceType`이 실제 원본과 정확히 연결되는가?",
+            "`confidence`: 이벤트의 `confidence`가 근거의 양과 신뢰도에 맞게 설정되었는가?"
+          ]
+        },
+        {
+          "key": "source_type_defects",
+          "label": "Source 유형별 문제 수정",
+          "points": 15,
+          "checks": [
+            "Fragment:\n    - 다른 근거와 의미적으로 연결되지 않는 fragment만으로 독립 이벤트를 만든 문제를 찾았는가?\n    - fragment 개수만으로 사건을 확정하지 않고, 사람·장소·활동·주제의 연결 여부를 검사했는가?",
+            "Calendar:\n    - Calendar 외 수행 근거가 없는데 참석·방문을 완료형으로 확정한 문제를 찾았는가?\n    - 동일한 실제 사건을 가리키는 Calendar와 다른 이벤트가 중복된 문제를 찾았는가?",
+            "Photo:\n    - 최종 Timeline에서 누락되거나 여러 이벤트에 중복 귀속된 Photo를 찾았는가?\n    - 사진의 내용·촬영 시각·장소와 일치하지 않는 이벤트에 귀속된 문제를 찾았는가?\n    - Vision 결과에서 확인되지 않는 사람·행동·장소·방문 목적을 추가한 문제를 찾았는가?\n    - 연결할 실제 사건이 있는데 별도의 `PHOTO_MOMENT`로 남긴 문제를 찾았는가?",
+            "Location:\n    - 주요 `MOVEMENT`, 이동의 도착지, 조건을 만족하는 `STAY`, 마지막 주요 이동의 누락을 찾았는가?\n    - 하나의 연결된 이동을 여러 `MOVEMENT` 이벤트로 과도하게 나눈 문제를 찾았는가?\n    - 이동 이후에도 이전 장소의 활동이 계속되는 것처럼 표현한 문제를 찾았는가?\n    - 위치 정보만으로 활동 목적이나 집·학교·회사 같은 생활 장소를 확정한 문제를 찾았는가?",
+            "Notification:\n    - 미래 예약을 오늘 수행한 사건으로 만든 문제를 찾았는가?\n    - 사용자 발신·답장 근거 없이 양방향 대화를 확정한 문제를 찾았는가?\n    - 일반 공지·다운로드·로그인 알림처럼 약한 Notification을 독립 사건으로 만든 문제를 찾았는가?"
+          ]
+        },
+        {
+          "key": "tool_selection",
+          "label": "Tool 선택과 실행 결과",
+          "points": 20,
+          "checks": [
+            "해당 되는 문제에 맞는 tool 을 선택했는가?",
+            "한 event의 한 field 문제에는 해당 event·field 수정 도구를 선택했는가?",
+            "한 event의 한 field 문제만 있는데 전체 Timeline 재실행 도구를 선택하지 않았는가?",
+            "둘 이상의 event 병합·분할 또는 시간순·장소 연결 문제에는 Timeline 재구성 도구를 선택했는가?",
+            "parse 실패·rawId 누락·source field 변환 오류로 Event Agent를 재실행한 경우, 그 결과를 입력으로 Timeline도 재실행했는가?",
+            "toolCall reason에 문제 근거와 기대 결과가 있는가?",
+            " 수정 전 source와 일치하던 사람·장소·활동 값을 수정 후에도 같은 값으로 유지했는가?"
+          ]
+        },
+        {
+          "key": "unrelated_edits",
+          "label": "관계없는 수정과 문제 수 변화",
+          "points": 20,
+          "checks": [
+            "문제가 있는 event와 field만 수정하고 정상 내용을 보존했는가?",
+            "원본이나 user memory에 없는 사람·장소 등을 새로 추가하지 않았는가?",
+            "하나의 문제를 고치면서 다른 사건을 훼손하지 않았는가?",
+            "Repair 후 전체 문제 수가 Repair 전보다 감소했고 새로 생성된 source 불일치·누락·중복·형식 위반이 없는가?"
+          ]
+        },
+        {
+          "key": "done_summary",
+          "label": "완료 상태와 Summary",
+          "points": 5,
+          "checks": [
+            "사용자 노출 문장인 `title`과 `description`에서 추정 표현(`~인 듯해요`, `아마`), 내부 용어(`GPS`, `센서`, `candidate`, `rawId`, `confidence`)와 원본 수치(`14시 37분`, `4,823걸음`, 위도·경도 등)를 제거하고 자연스러운 일기 문장으로 표현했는가?",
+            "source 불일치·필수 source 누락·중복 event·형식 위반 또는 HIGH issue가 1건 이상 남아 있으면 `done=false`로 종료했는가?",
+            "미해결 문제를 해결됐다고 표현하지 않았는가?",
+            "issue가 0건이면 toolCall도 0건인가?",
+            "Summary에 issues의 ID·상태와 실행한 toolCall ID 및 미해결 issue ID가 누락 없이 들어 있는가?"
+          ]
+        }
+      ],
+      "promptSha256": "ff7eed2c57bc3ad804201eba3ac6d7bad87baf2bbe8b3a95346bdb54db779001",
+      "promptChars": 12396
+    },
+    {
+      "key": "question",
+      "label": "Question Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "event_grounding",
+          "label": "Event 이해와 근거",
+          "points": 20,
+          "checks": [
+            "질문이 전제하는 활동·장소·사람·시간대가 해당 event의 title·description·place·eventType에서 확인되는가?",
+            "event에 이미 있는 사람·장소·활동·시간을 다시 묻지 않고, event에 없는 생각·감정·이유·인상 중 하나 이상을 묻는가?",
+            "timeOfDay는 `아침`, `점심 무렵`, `오후`, `저녁`, `밤` 중 입력값에 대응하는 표현으로만 사용하고 시·분 숫자나 입력 timeOfDay 문자열을 그대로 쓰지 않았는가?",
+            "event에서 비어 있는 사람·장소·행동을 질문에 추가하지 않았는가?",
+            "User Memory의 선호 주제·호칭은 질문 표현에 사용할 수 있지만, User Memory에만 있는 사람·장소·활동을 해당 event의 사실로 쓰지 않았는가?"
+          ]
+        },
+        {
+          "key": "reflection",
+          "label": "회고 유도 조건",
+          "points": 30,
+          "checks": [
+            "질문 대상이 해당 event에서 사용자가 경험한 행동·생각·감정·이유·인상·배운 점 중 하나 이상인가?",
+            "질문에 해당 event의 title·description·place·timeOfDay·활동 중에 관련 내용이 하나 이상이 포함됐는가?",
+            "예·아니오만 요구하는 단답형 질문이 아니라 행동·생각·감정·이유·인상·배운 점 등의 주관식 서술을 요구하는가?",
+            "event에 이미 있는 발생 여부·장소·시각에 대해 다시 묻지 않았는가?",
+            "입력에 없는 감정·원인·평가를 질문의 전제로 단정하지 않았는가?"
+          ]
+        },
+        {
+          "key": "expression",
+          "label": "질문 표현",
+          "points": 20,
+          "checks": [
+            "질문이 `요?`로 끝나는 한 문장인가?",
+            "질문이 40자 이내로 끝나는가?",
+            "시스템 내부 수집·누락·추정·정확도·신뢰도를 노출하지 않았는가?"
+          ]
+        },
+        {
+          "key": "coverage",
+          "label": "모든 Event의 질문 생성",
+          "points": 20,
+          "checks": [
+            "입력의 모든 clientEventId에 질문을 1개씩 생성했는가?",
+            "입력 event가 1개 이상인 모든 eventType에서 질문 미생성 event 수가 0인가?"
+          ]
+        },
+        {
+          "key": "uniqueness",
+          "label": "질문 고유성과 연결",
+          "points": 10,
+          "checks": [
+            "서로 다른 event에 중복 질문을 생성하지 않았는가?",
+            "event의 title·place·timeOfDay·활동 값이 다르면 질문에도 해당 값 중 하나 이상의 차이가 있는가?",
+            "질문이 전제하는 title·place·timeOfDay·활동이 연결된 clientEventId의 event와 일치하는가?"
+          ]
+        }
+      ],
+      "promptSha256": "6ccf0171456ec6d31736d7a5d2521ee6692837f464ad808b7770109d3f5bae15",
+      "promptChars": 8878
+    },
+    {
+      "key": "user-memory",
+      "label": "User Memory Agent",
+      "edited": false,
+      "points": 100,
+      "items": [
+        {
+          "key": "provenance",
+          "label": "입력 근거 구분",
+          "points": 20,
+          "checks": [
+            "profile의 각 정보 단위에 title·subtitle·memo·event 중 출처 field를 기록하고, 해당 field 원문에서 그 정보를 확인할 수 있는가?",
+            "title·subtitle에서 추출한 정보와 memo에서 추출한 정보의 provenance를 서로 다른 field 값으로 기록했는가?",
+            "memo가 없고 title·subtitle에서도 같은 성향이 서로 다른 날짜에 2회 이상 확인되지 않으면 기존 personality·values·preferences·emotionalPatterns·memoryStyle 값을 바꾸지 않았는가?",
+            "완성된 timeline 의 event 들의 내용을 기반으로 routines·lifeContext·currentFocus 를 모두 추가했는가?"
+          ]
+        },
+        {
+          "key": "update_method",
+          "label": "전체 갱신 방식",
+          "points": 15,
+          "checks": [
+            "기존 정보와 신규 정보가 같은 Field로 분류되면 이들을 모두 포함하도록 합쳤는가?",
+            "기존 정보가 최신 기록의 같은 field 값과 충돌하면 기존 정보를 제거하거나 최신 값으로 교체했는가?",
+            "이번 타임라인에서 추가되거나 병합되지 않은 기존 Field를 보존했는가?"
+          ]
+        },
+        {
+          "key": "field_placement",
+          "label": "근거 일치와 Field 배치",
+          "points": 30,
+          "checks": [
+            "| `basicProfile`      | 연령대·직업·역할·생애 단계가 title·subtitle·memo·event의 명시적 문장에 있다면 그들을 정확히 기록했는가? 명시하지 않았다면 title·subtitle·memo·event에서 추측하여 추가했는가?                                                   |",
+            "| `lifeContext`       | 삶의 상황·변화가 memo에 명시되었다면 이를 정확히 기록했는가? 명시하지 않았다면 기록된 title·subtitle·memo·event을 통해 추측하여 추가했는가?                                                                               |",
+            "| `relationships`     | 기록에서 등장하는 인물에 대한 관계 호칭 또는 관계 설명이 입력에 있다면? 이름만 있고 관계 표현이 없으면 관계를 추가하지 않았는가?                                                                                                 |",
+            "| `personality`       | title·subtitle·memo에서 사용자가 어떤 사람인지, 성격 및 성향을 가지고 있는지 추론하여 작성했는가? 기존에 저장된 정보와 합쳤거나 충돌되는 경우 최신의 것으로 대체했는가?                                                                   |",
+            "| `values`            | 가치 판단이 memo·title·subtitle에 명시되었다면 이를 반영했는가? 기존에 저장된 정보와 합쳤거나 충돌되는 경우 최신의 것으로 대체했는가?                                                                                       |",
+            "| `preferences`       | 좋아함·싫어함이 입력에 명시되었다면 이를 반영했는가? 기존에 저장된 정보와 합쳤거나 충돌되는 경우 최신의 것으로 대체했는가?                                                                                                      |",
+            "| `routines`          | `MEAL`, `MEETING`, `CLASS`, `WORK`, `EXERCISE`, `SOCIAL` 등의 eventtype인 event 가 있다면 시간대·eventType·활동을 모두 저장했으며, 기존에 동일한 값이 저장되어있으면 합치고 새로운 것이라면 추가했으며 충돌되는 것은 오래된 것을 삭제했는가? |",
+            "| `currentFocus`      | 목표·과제·고민이 최신 기록에 명시되었다면 이를 기록했는가? 기존 저장되어있으면 합치고 새로운 것이라면 추가했으며 충돌되는 것은 오래된 것을 삭제했는가?                                                                                      |",
+            "| `emotionalPatterns` | memo에 기록된 감정을 느끼는 부분, 선택한 감정들이 어떤 상황에서 어떤 감정을 느꼈는 지 기록했는가? 기존 저장되어있으면 합치고 새로운 것이라면 추가했으며 충돌되는 것은 오래된 것을 삭제했는가?                                                             |",
+            "| `memoryStyle`       | memo 가 작성된 문체, 문장 구성등을 분석해서 기록하고 기존 저장되어있으면 합치고 새로운 것이라면 추가했으며 충돌되는 것은 오래된 것을 삭제했는가?                                                                                       |"
+          ]
+        },
+        {
+          "key": "field_confusion",
+          "label": "Field 혼동과 customAttributes",
+          "points": 15,
+          "checks": [
+            "personality와 values, values와 preferences를 구분해서 추출했는가?",
+            "routines와 currentFocus, lifeContext와 currentFocus를 구분해서 추출했는가?",
+            "자신이 아닌 주변 사람의 직업·역할을 사용자의 `basicProfile`에 넣지 않았는가?",
+            "고정 field 정의 중 어느 것에도 해당하지 않는 정보만 customAttributes에 추가했는가?",
+            "동일한 사람·장소·활동·시간·성향 주장을 둘 이상의 field 또는 customAttributes에 반복하지 않았는가?"
+          ]
+        },
+        {
+          "key": "size_privacy",
+          "label": "크기·압축·개인정보",
+          "points": 20,
+          "checks": [
+            "중복 정보와 최신 기록에 의해 부정된 정보를 제거하고, 유지 대상 정보는 남겼는가?",
+            "각 자연어 field가 500자 이하이고, 같은 정보 단위가 둘 이상의 문장에 반복되지 않았는가?",
+            "실명·이메일·상세 주소·전화번호·계좌번호·카드번호·인증정보와 날짜·분 단위 시각·걸음 수를 포함하지 않았는가?",
+            "인물 고유명사는 입력에 있는 관계 호칭으로, 장소 고유명사는 장소 유형으로 바꿨는가?"
+          ]
+        }
+      ],
+      "promptSha256": "def79ad12c78defcba20dd0fc26f96ddc9ab27538d21542095975599dc20b3a5",
+      "promptChars": 13086
+    }
+  ],
+  "experiments": [
+    {
+      "case": "heldout-good",
+      "variant": "old",
+      "scores": [
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "range": 0.0,
+      "mean": 100.0,
+      "stddev": 0.0,
+      "coverage": [
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "hallucinationAlerts": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "case": "heldout-good",
+      "variant": "new",
+      "scores": [
+        99.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0
+      ],
+      "range": 1.0,
+      "mean": 99.8,
+      "stddev": 0.4,
+      "coverage": [
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "hallucinationAlerts": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "case": "heldout-missing-and-unsupported",
+      "variant": "old",
+      "scores": [
+        91.0,
+        91.0,
+        76.0,
+        92.0,
+        89.0
+      ],
+      "range": 16.0,
+      "mean": 87.8,
+      "stddev": 5.979966555090421,
+      "coverage": [
+        14,
+        15,
+        0,
+        15,
+        14
+      ],
+      "hallucinationAlerts": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "case": "heldout-missing-and-unsupported",
+      "variant": "new",
+      "scores": [
+        74.0,
+        74.0,
+        74.0,
+        74.0,
+        74.0
+      ],
+      "range": 0.0,
+      "mean": 74.0,
+      "stddev": 0.0,
+      "coverage": [
+        15,
+        15,
+        15,
+        15,
+        15
+      ],
+      "hallucinationAlerts": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    }
+  ],
+  "files": {
+    "app/analysis/calibration.py": {
+      "sha256": "2e3463c964dbeb2534d50e709ffe166724f98a9f0e49ab461464b275ddfab660",
+      "lines": 137
+    },
+    "app/analysis/deterministic_checks.py": {
+      "sha256": "e379a2723d3438938f64f74e33d8fa755e634e4c4e54b90f54b17c1e4cd2af9b",
+      "lines": 44
+    },
+    "app/analysis/stage_judge.py": {
+      "sha256": "f9cc7c9395b85990043bf71f229e657a0fba12fb41dc96eff6e451b1ccbf907b",
+      "lines": 157
+    },
+    "app/analysis/stage_schema.py": {
+      "sha256": "cb2fc23e04515c1b1d483a51a6ecb94bf191107cb98d6b54874a272dcc6fa4cd",
+      "lines": 248
+    },
+    "app/analysis/evidence.py": {
+      "sha256": "b98464e14ee9fd65bc93394876802f62c77047fa2c474a71172144bbf9f2cd19",
+      "lines": 510
+    },
+    "app/analysis/evaluation_record.py": {
+      "sha256": "129bdad133cd359e48f15563640cffc49998b2794a14e3ff8c135b16fae35cfe",
+      "lines": 298
+    },
+    "app/ui/stage_view.py": {
+      "sha256": "cef0c9672a15ece1448ba1aae1b7c35704f03d48082e76ec6631994131cbcdc7",
+      "lines": 435
+    },
+    "scripts/check_judge_repeatability.py": {
+      "sha256": "4297c976bedc9e458f7437c6e0f93353bf320156a0a686dd23dcc8e16f765974",
+      "lines": 114
+    },
+    "tests/test_calibration.py": {
+      "sha256": "9e3261b442026612a663996d37c7711dfb456f24cde2b7c30039e5d655fcb3df",
+      "lines": 142
+    },
+    "tests/test_stage_evidence.py": {
+      "sha256": "a0e4ae4c8c8dbbf1e0c28cd02332afec5156c68d04fb20d59ef6f5e48b3bb74c",
+      "lines": 382
+    },
+    "assets/rubrics/laimory-metric-v5.md": {
+      "sha256": "22c1e7b24531043d5ef65768f7b7f470094fc354c58c057294fcc7f34f891cb0"
+    },
+    "app/analysis/stages.py": {
+      "sha256": "b451614e75b7580269ed8e521f50f470668a2544ee863ca034b00556fb067100"
+    },
+    "app/analysis/providers.py": {
+      "sha256": "41f38b9ea698e31c56654caba3ba615837d62d56e21ecdd1826500ec73ba14a9"
+    },
+    "assets/rubrics/calibration/rules.md": {
+      "sha256": "d4c61a7e26c093830b99b0c2d0f6e3640636306048c907021ce408934f409e8f"
+    },
+    "assets/rubrics/calibration/event-location.md": {
+      "sha256": "3ecf2835bde7d18cb0c4f0bb2d1a8272cb5abd67e7e96ff3fb0febb5e7557ed7"
+    },
+    "assets/rubrics/calibration/event-calendar.md": {
+      "sha256": "397c68cb22cec26863d51283d17c520077214bac27190cf34c536a285b54de51"
+    },
+    "assets/rubrics/calibration/event-notification.md": {
+      "sha256": "95384e140a6e6f2d80306ab93c6219d9b197200cf6b1f12f0bae4cc217432dcc"
+    },
+    "assets/rubrics/calibration/event-photo.md": {
+      "sha256": "6a1abc75efbcdfd8d866191fafb2a32a2461c9db2ed3ecdad2d8d7e841e50940"
+    },
+    "assets/rubrics/calibration/timeline.md": {
+      "sha256": "bdde08c56ce1dcc0b2891f918232a4f3755537f4c82df2e177afa0a79f65809b"
+    },
+    "assets/rubrics/calibration/repair.md": {
+      "sha256": "5426be3e52d09e0afdddb00a4f32af2bf12b0a63a63a1fc07b3077241a1f9cdd"
+    },
+    "assets/rubrics/calibration/question.md": {
+      "sha256": "b76d5e066b2f77d9ec86c84380e94b2d8d0ebe1b3967094115316aa1015f6c6f"
+    },
+    "assets/rubrics/calibration/user-memory.md": {
+      "sha256": "1e58204b6763b54dabbb464ce7f3880a7c6c14be628ea328db1d772a5f3cd3fb"
+    }
+  },
+  "newInferenceCalls": 0,
+  "promptAppendix": "2026-09-10-채점-변경-프롬프트원문부록.md",
+  "codeAppendix": "2026-09-10-채점-변경-구현코드부록.md",
+  "questionPromptMatchesExperiment": true,
+  "experimentAppendix": "2026-09-10-채점-변경-실험결과부록.md",
+  "registryNow": {
+    "event-location": [],
+    "event-calendar": [],
+    "event-notification": [
+      1,
+      2
+    ],
+    "event-photo": [],
+    "timeline": [
+      1,
+      2
+    ],
+    "repair": [
+      1,
+      2
+    ],
+    "question": [
+      1,
+      2
+    ],
+    "user-memory": []
+  }
+}

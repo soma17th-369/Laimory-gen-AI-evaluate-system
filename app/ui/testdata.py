@@ -121,7 +121,7 @@ def _tab_from_logs() -> None:
 
 
 def render() -> None:
-    st.title("🧪 테스트 데이터")
+    st.title("테스트 데이터")
     tab1, tab2 = st.tabs(["개선책 기반 (검증용)", "로그 input 기반 (실행용)"])
     with tab1:
         _tab_from_improvement()

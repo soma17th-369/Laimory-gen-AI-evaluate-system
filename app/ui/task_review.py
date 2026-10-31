@@ -1,41 +1,62 @@
-"""② Task 리뷰·채점 — task 별 전체 처리과정을 중복 없는 trace.json 으로 재구성해 보고 저장.
+"""② Task 리뷰·채점 — 한 Task 의 처리 과정을 보고 **단계별로** 채점한다.
 
-처리과정(steps)·최종 타임라인(result)·프롬프트(generations)를 명세 구조로 보여주고,
-`data/tasks/<taskId>/trace.json` 에 저장한다(프롬프트는 §14 권고대로 trace.json 통합).
-채점 결과는 `data/evaluations/<taskId>.json`.
+한 화면에서 셋을 같이 본다(→ [app.ui.stage_view][]).
 
-목록은 개발·운영 로그를 합쳐 보여준다(→ [app.environments][]). 상세 조회는 **그 행이 온
-프로젝트로** 보내야 하므로, 선택한 행의 `env` 를 그대로 따라간다. 채점 결과에도 같은 값을 남겨
-어느 프로젝트의 task 를 잰 것인지 나중에 알 수 있게 한다.
+1. 원본 데이터의 상태 — 이 Task 가 무엇을 받았는지.
+2. 그 채점이 정확히 무엇을 봤는지 — 단계별 근거(채점 프롬프트에 들어간 그대로).
+3. 채점 결과 — 항목별 점수와 이유, 감점 근거, 별도 알림.
 
-고르는 곳과 보는 곳을 나누지 않는다. **목록에서 행을 클릭하면 바로 그 아래에** 처리 과정과
-채점이 펼쳐진다(`st.dataframe` 의 행 선택). 선택은 표의 위치 index 로 오므로 화면에 넘긴 행
-목록과 같은 순서를 유지해야 한다.
+목록은 개발·운영 로그를 합쳐 보여준다(→ [app.environments][]). 상세 조회는 **그 행이 온 프로젝트로** 보내야 하므로 선택한 행의
+`env` 를 그대로 따라간다.
+
+수집 목록에는 대상 서버의 **테스트 실행**(taskId 가 `task-test` 고정, 비용 0, 관측치 1~7개)이
+실제 실행보다 훨씬 많다. 기본은 채점 대상만 보여주고, 필요하면 필터를 끈다.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from app import environments
-from app.analysis.judge import assemble_evidence, score_trace
-from app.analysis.providers import (
-    JudgeProviderError,
-    llm_provider_label,
-    llm_setup_error,
-)
-from app.analysis.rubric import SYSTEM_PROMPT, build_user_prompt
-from app.analysis.schema import CRITERION_KEYS, CRITERION_LABELS, METRIC_KEYS, METRIC_LABELS
+from app.analysis import evaluation_record, evidence as evidence_mod, stage_judge, stages
+from app.analysis.providers import JudgeProviderError, llm_provider_label, llm_setup_error
 from app.langfuse_client import get_trace
-from app.prompts import registry
 from app.storage import store
-from app.storage.paths import collection_file, evaluation_file, task_trace_file
+from app.storage.paths import collection_file, task_trace_file
 from app.tasks.trace_builder import build_trace_json
+from app.ui import stage_view
 
-RUBRIC_NAME = "judge-rubric"  # 채점 기준 프롬프트의 레지스트리 이름
+_COLUMN_ORDER = (
+    "env",
+    "timestamp",
+    "taskId",
+    "task",
+    "task_time",
+    "total_cost",
+    "채점 여부",
+    "채점 시각",
+)
+"""표에 보일 열. 이 목록에 없는 값(trace id·user_id 등)은 화면에 내보내지 않는다."""
+
+_TABLE_HEIGHT = 320
+"""목록 높이(px). 선택한 행의 상세가 화면 안에서 바로 이어지도록 목록을 짧게 잡는다."""
+
+_SCORABLE_NAMES = frozenset({stages.TIMELINE_TRACE, stages.USER_MEMORY_TRACE})
+"""채점 대상 트레이스 이름. 나머지 이름은 대상 서버 테스트가 남긴 조각이다."""
+
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _is_scorable(row: dict[str, Any]) -> bool:
+    """실제 실행인지. 이름이 맞고 taskId 가 UUID 형식이어야 한다(`task-test` 등 제외)."""
+    if row.get("name") not in _SCORABLE_NAMES:
+        return False
+    task_id = str(row.get("taskId") or "")
+    return bool(_UUID.match(task_id))
 
 
 def _domain_task_id(trace_detail: Any, trace_id: str) -> str:
@@ -47,20 +68,65 @@ def _domain_task_id(trace_detail: Any, trace_id: str) -> str:
     return trace_id
 
 
-_COLUMN_ORDER = ("env", "timestamp", "name", "taskId", "latency", "total_cost", "user_id", "id")
-"""표에 보일 열 순서. 어느 환경·언제·무엇인지가 먼저 오게 한다."""
+def scored_index() -> dict[str, dict[str, Any]]:
+    """taskId → 저장된 채점 결과. 목록에 채점 여부를 붙이는 데 쓴다."""
+    return {
+        str(record.get("taskId") or path.stem): record
+        for path, record in evaluation_record.load_all()
+    }
 
-_TABLE_HEIGHT = 360
-"""목록 높이(px). 선택한 행의 상세가 화면 안에서 바로 이어지도록 목록을 짧게 잡는다."""
+
+def _scored_columns(row: dict[str, Any], scored: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """행 하나의 채점 여부. 단계까지는 아래 단계 표에서 보므로 목록에서는 O/X 로만 구분한다.
+
+    구버전(7기준) 결과는 지금 채점과 이어지지 않으므로 `X` 로 둔다.
+    """
+    record = scored.get(str(row.get("taskId") or ""))
+    if record is None or evaluation_record.is_legacy(record):
+        return {"채점 여부": "X", "채점 시각": ""}
+    if not (record.get("composite") or {}).get("evaluatedCount"):
+        return {"채점 여부": "X", "채점 시각": ""}
+    return {"채점 여부": "O", "채점 시각": (record.get("updatedAt") or "")[:16].replace("T", " ")}
 
 
-def _selectable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def display_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """표에 그릴 값만 남기고 단위를 붙인다. 순서는 넘긴 그대로(선택 index 가 맞아야 한다)."""
+    out = []
+    for row in rows:
+        latency = row.get("latency")
+        cost = row.get("total_cost")
+        out.append(
+            {
+                "env": environments.short_label(environments.of(row)),
+                "timestamp": str(row.get("timestamp") or "")[:19],
+                "taskId": row.get("taskId"),
+                "task": row.get("name"),
+                "task_time": f"{latency:.1f}s" if isinstance(latency, (int, float)) else "",
+                "total_cost": f"${cost:.4f}" if isinstance(cost, (int, float)) else "",
+                "채점 여부": row.get("채점 여부", "X"),
+                "채점 시각": row.get("채점 시각", ""),
+            }
+        )
+    return out
+
+
+def _selectable_rows(
+    rows: list[dict[str, Any]],
+    *,
+    only_scorable: bool,
+    scored: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """표에 그대로 넘길 행 목록. 선택은 이 리스트의 위치로 돌아온다."""
-    return [dict(row) for row in rows if isinstance(row, dict) and row.get("id")]
+    usable = [dict(row) for row in rows if isinstance(row, dict) and row.get("id")]
+    if only_scorable:
+        usable = [row for row in usable if _is_scorable(row)]
+    if scored is not None:
+        for row in usable:
+            row.update(_scored_columns(row, scored))
+    return usable
 
 
 def _picked_row(rows: list[dict[str, Any]], selection: Any) -> dict[str, Any] | None:
-    """표 선택 결과에서 행 하나를 꺼낸다. 아무것도 안 골랐으면 None."""
     positions = list(getattr(selection, "rows", None) or [])
     if not positions:
         return None
@@ -68,237 +134,172 @@ def _picked_row(rows: list[dict[str, Any]], selection: Any) -> dict[str, Any] | 
     return rows[index] if 0 <= index < len(rows) else None
 
 
-def _render_scorecard(card: Any) -> None:
-    st.markdown(f"**종합 {card.overall.score} / 10** — {card.summary}")
-    rows = [
-        {"기준": CRITERION_LABELS[k], "점수": f"{getattr(card.scores, k).score}/10", "근거": getattr(card.scores, k).reason}
-        for k in CRITERION_KEYS
-    ]
-    rows.append({"기준": CRITERION_LABELS["overall"], "점수": f"{card.overall.score}/10", "근거": card.overall.reason})
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-    metrics = getattr(card, "metrics", None)
-    if metrics is not None:
-        with st.expander("정량 Metric 20개", expanded=True):
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "Metric": METRIC_LABELS[key],
-                            "값": getattr(metrics, key).value,
-                            "분자": getattr(metrics, key).numerator,
-                            "분모": getattr(metrics, key).denominator,
-                            "근거": getattr(metrics, key).reason,
-                        }
-                        for key in METRIC_KEYS
-                    ]
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-    if card.findings:
-        st.markdown("**문제점**")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {"기준": CRITERION_LABELS.get(f.criterion, f.criterion), "심각도": f.severity, "설명": f.description}
-                    for f in card.findings
-                ]
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-
-def _judge_and_save(
-    trace_id: str,
+def _run_judge(
+    *,
+    trace_json: dict,
+    stage_keys: list[str],
     task_id: str,
-    detail: Any,
-    system_prompt: str,
+    trace_id: str,
     env: str,
-    note: str = "",
+    evidences: dict[str, Any],
+    workers: int,
+    trace_meta: dict[str, Any] | None = None,
 ) -> None:
+    """선택한 단계를 채점하고 결과를 저장한다. 한 단계가 실패해도 나머지는 남긴다."""
+    # 채점 기준은 현재 채점 항목으로 매번 새로 만든다(설정 화면에서 고친 내용이 바로 나간다).
+    prompts = {key: stage_judge.system_prompt(key) for key in stage_keys}
+    failures: list[str] = []
+    progress = st.progress(0.0, text="채점 준비 중…")
+    done = 0
+
+    def on_done(stage_key: str, _score: Any, error: Exception | None) -> None:
+        nonlocal done
+        done += 1
+        progress.progress(done / len(stage_keys), text=f"{stages.get(stage_key).label} 완료 ({done}/{len(stage_keys)})")
+        if error is not None:
+            failures.append(f"{stages.get(stage_key).label}: {type(error).__name__}: {error}")
+
     try:
-        # 채점에 쓴 기준을 버전으로 확정(같은 본문이면 기존 버전 재사용).
-        version = registry.get_or_create(RUBRIC_NAME, system_prompt, note=note, source="judge")
-        trace_json = build_trace_json(detail)
-        with st.spinner(f"채점 중… ({llm_provider_label()})"):
-            card = score_trace(detail, system_prompt=system_prompt)
-        st.session_state.setdefault("tr_cards", {})[trace_id] = card
-        # 채점 결과 페이지에서 네트워크 재조회 없이 입출력을 비교할 수 있게 함께 저장한다.
-        input_data = {"task": trace_json["task"], "source": trace_json["source"]}
-        output_data = trace_json["result"]["timeline"]
-        if output_data is None:
-            output_data = trace_json["operation"]
-        store.save_json(task_trace_file(task_id), trace_json)
-        path = evaluation_file(task_id)
-        store.save_json(
-            path,
-            {
-                "taskId": task_id,
-                "traceId": trace_id,
-                "env": env,  # 어느 LangFuse 프로젝트의 task 를 잰 것인지
-                "name": getattr(detail, "name", None),
-                "rubricRef": {"name": version["name"], "version": version["version"]},  # 채점 기준 버전
-                "systemPrompt": system_prompt,  # 재현용 본문(해당 버전과 동일)
-                "inputPrompt": build_user_prompt(assemble_evidence(detail)),  # 채점 입력 프롬프트
-                "inputData": input_data,
-                "outputData": output_data,
-                "scorecard": card.model_dump(),  # 결과
-            },
+        results = stage_judge.score_stages(
+            trace_json, stage_keys, workers=workers, prompts=prompts, on_done=on_done
         )
-        st.session_state["tr_saved_path"] = path.as_posix()
-        st.toast(f"평가 저장(기준 v{version['version']}): {path.as_posix()}")
     except JudgeProviderError as exc:
+        progress.empty()
         st.error(f"채점 실패 [{exc.code}]: {exc}")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"채점 실패: {type(exc).__name__}: {exc}")
+        return
+    progress.empty()
 
-
-def _render_scoring(selected: str, task_id: str, detail: Any, env: str) -> None:
-    st.subheader("채점")
-
-    versions = registry.list_versions(RUBRIC_NAME)
-    labels = {
-        v["version"]: f"v{v['version']} · {v.get('note') or '메모 없음'} · {v.get('createdAt', '')[:16]}"
-        for v in versions
+    rubric_refs = {}
+    for key in results:
+        version = stage_judge.register_rubric(key, prompts[key], note="단계 채점")
+        rubric_refs[key] = {"name": version["name"], "version": version["version"]}
+    summaries = {
+        key: {
+            "summary": evidences[key].summary,
+            "sections": [section.title for section in evidences[key].sections],
+        }
+        for key in results
     }
-    # 불러오기 옵션: 저장된 버전(최신 우선) + 코드 기본값(sentinel 0)
-    options = [v["version"] for v in reversed(versions)] + [0]
-    picked = st.selectbox(
-        "기준 버전 (불러오기)",
-        options,
-        index=0,
-        format_func=lambda v: "코드 기본값 (미저장)" if v == 0 else labels[v],
-        key=f"rubric_base_{selected}",
-        help="과거 버전을 골라 편집기에 불러옵니다. 편집 후 '새 버전으로 저장'하거나 채점하면 버전이 만들어집니다.",
+    record = evaluation_record.save_stages(
+        task_id=task_id,
+        trace_id=trace_id,
+        env=env,
+        trace_name=(trace_json.get("task") or {}).get("traceName"),
+        date=(trace_json.get("source") or {}).get("date"),
+        results=results,
+        rubric_refs=rubric_refs,
+        evidence_summaries=summaries,
+        trace_meta=trace_meta,
     )
-    base_content = SYSTEM_PROMPT if picked == 0 else (registry.get(RUBRIC_NAME, picked) or {}).get("content", SYSTEM_PROMPT)
-
-    # 선택한 기준 버전이 바뀌면 편집기 내용을 그 버전으로 되돌린다.
-    editor_key = f"rubric_editor_{selected}"
-    applied_key = f"rubric_applied_{selected}"
-    if editor_key not in st.session_state or st.session_state.get(applied_key) != picked:
-        st.session_state[editor_key] = base_content
-        st.session_state[applied_key] = picked
-
-    system_prompt = st.text_area(
-        "채점 기준 (system prompt · 편집 가능)",
-        height=280,
-        key=editor_key,
-        help="편집하면 이 기준으로 채점합니다. 점수 7기준+전반과 v3 Metric 20개는 스키마로 고정됩니다.",
-    )
-    note = st.text_input("변경 메모 (새 버전 저장·채점 시 기록)", key=f"rubric_note_{selected}")
-
-    save_col, judge_col = st.columns(2)
-    if save_col.button("새 버전으로 저장", key=f"rubric_save_{selected}", width="stretch"):
-        before = registry.latest(RUBRIC_NAME)
-        rec = registry.get_or_create(RUBRIC_NAME, system_prompt, note=note, source="manual")
-        if before is None or rec["version"] != before["version"]:
-            st.toast(f"새 버전 저장: {RUBRIC_NAME} v{rec['version']}")
-        else:
-            st.toast(f"변경 없음 — 최신 v{rec['version']} 그대로")
-
-    setup_error = llm_setup_error()
-    can_judge = setup_error is None
-    if judge_col.button("이 task 채점", type="primary", disabled=not can_judge, key=f"judge_{selected}", width="stretch"):
-        _judge_and_save(selected, task_id, detail, system_prompt, env, note=note)
-    st.caption(f"LLM Provider: {llm_provider_label()}")
-    if setup_error:
-        st.caption(setup_error)
-
-    with st.expander("채점 입력 프롬프트 (judge 에 들어가는 근거)"):
-        st.code(build_user_prompt(assemble_evidence(detail)))
-
-    with st.expander(f"채점 기준 버전 이력 ({len(versions)}개)"):
-        if not versions:
-            st.caption("저장된 버전이 아직 없습니다. 편집 후 저장하거나 채점하면 v1 이 생성됩니다.")
-        else:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "버전": f"v{v['version']}",
-                            "생성": v.get("createdAt", "")[:16],
-                            "출처": v.get("source"),
-                            "부모": f"v{v['parent']}" if v.get("parent") else "-",
-                            "메모": v.get("note") or "-",
-                        }
-                        for v in reversed(versions)
-                    ]
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-
-    saved_path = st.session_state.get("tr_saved_path")
-    if saved_path:
-        st.caption(f"저장 위치: `{saved_path}` (기준 버전·입력 프롬프트·결과 포함)")
-
-    card = st.session_state.get("tr_cards", {}).get(selected)
-    if card is not None:
-        _render_scorecard(card)
+    store.save_json(task_trace_file(task_id), trace_json)
+    composite = (record.get("composite") or {}).get("score")
+    st.toast(f"채점 저장 — 종합 {composite if composite is not None else '-'}/100")
+    if failures:
+        st.warning("일부 단계가 실패했습니다:\n\n" + "\n".join(f"- {item}" for item in failures))
 
 
-def _render_process(tj: dict) -> None:
-    steps = tj["process"]["steps"]
-    generations = tj["process"]["generations"]
+def _render_stage(
+    *,
+    stage_evidence: Any,
+    record: dict[str, Any] | None,
+    trace_id: str,
+    on_judge: Any,
+) -> None:
+    """단계 하나: 근거와 결과를 나란히 보여주고 그 자리에서 채점한다."""
+    spec = stage_evidence.stage
+    entry = evaluation_record.stage_score(record or {}, spec.key) or {}
+    card = entry.get("scorecard") or {}
+    total = card.get("total")
+    state = "채점 전" if not card else (f"{total}/100" if total is not None else "N/A")
+    label = f"{spec.label} · {state}"
+    if not stage_evidence.applicable:
+        label = f"{spec.label} · 근거 없음"
 
-    with st.expander(f"처리 과정 (steps {len(steps)}개, 실행 순서)", expanded=True):
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "순서": s["order"],
-                        "단계": s["name"],
-                        "유형": s["type"],
-                        "입력참조": ", ".join(s["inputRefs"]),
-                        "GEN": len(s["generationRefs"]),
-                    }
-                    for s in steps
-                ]
-            ),
-            width="stretch",
-            hide_index=True,
+    with st.expander(label, expanded=False):
+        head_left, head_right = st.columns([3, 1], vertical_alignment="center")
+        head_left.caption(
+            f"{spec.total_points}점 만점 · 항목 {len(spec.items)}개 · 기준 문서 {', '.join(spec.doc_sections)}절"
+            + (f" · 최근 채점 {entry.get('judgedAt', '')[:16]}" if entry.get("judgedAt") else "")
         )
+        if head_right.button(
+            "이 단계 채점",
+            key=f"judge_{spec.key}_{trace_id}",
+            width="stretch",
+            disabled=not stage_evidence.applicable,
+        ):
+            on_judge([spec.key])
 
-    with st.expander("최종 타임라인 (result.timeline)"):
-        st.json(tj["result"]["timeline"] or {}, expanded=False)
+        evidence_column, result_column = st.columns([1, 1], gap="medium", vertical_alignment="top")
+        with evidence_column:
+            st.markdown("**이 채점이 본 것**")
+            stage_view.render_evidence(stage_evidence)
+        with result_column:
+            st.markdown("**채점 결과**")
+            stage_view.render_scorecard(card)
 
-    with st.expander(f"프롬프트 (generations {len(generations)}개)"):
-        if not generations:
-            st.caption("이 트레이스에는 GENERATION 관측치가 없습니다.")
-        for gen in generations:
-            st.markdown(f"**{gen['name']}** · `{gen['model']}`")
-            for msg in gen.get("input") or []:
-                if isinstance(msg, dict):
-                    st.caption(f"<{msg.get('role')}>")
-                    st.code(str(msg.get("content", ""))[:4000])
+        edit_key = f"rubric_edit_{spec.key}_{trace_id}"
+        edited_mark = " · 수정됨" if stages.is_edited(spec.key) else ""
+        with st.expander(
+            f"채점 기준 · 항목 {len(spec.items)}개 / {spec.total_points}점{edited_mark}",
+            expanded=bool(st.session_state.get(edit_key)),
+        ):
+            if st.session_state.get(edit_key):
+                st.caption(
+                    "항목·배점·확인 기준을 고쳐 저장하면 다음 채점부터 이 기준이 채점 프롬프트로 나갑니다."
+                )
+                stage_view.render_criteria_editor(spec, state_key=edit_key)
+            else:
+                stage_view.render_criteria(spec)
+                if st.button("기준 수정", key=f"edit_{spec.key}_{trace_id}"):
+                    st.session_state[edit_key] = True
+                    st.rerun()
 
 
 def render() -> None:
-    st.title("🔍 Task 리뷰·채점")
+    st.title("Task 리뷰·채점")
     st.caption(
-        "LangFuse 로그 수집 페이지에서 만든 공용 로그(개발·운영 합계)를 검토하고 채점합니다. "
-        "목록에서 행을 클릭하면 바로 아래에 그 트레이스의 처리 과정과 채점이 나타납니다."
+        "LangFuse 로그를 단계별로 잘라 Agent 마다 채점합니다. 목록에서 행을 클릭하면 "
+        "원본 데이터 상태 · 각 단계가 본 근거 · 채점 결과가 아래에 함께 나타납니다."
     )
+    stage_view.inject_css()
 
     traces = store.load_json(collection_file()) or []
     if not traces:
         st.info("먼저 **LangFuse 로그 수집** 페이지에서 로그를 수집하세요.")
         return
 
-    summaries = _selectable_rows(traces)
+    only_scorable = st.checkbox(
+        "채점 대상만 보기",
+        value=True,
+        help=(
+            "실제 실행(generate-timeline · update-user-memory)만 남깁니다. 나머지 이름은 대상 서버의 "
+            "테스트 실행이 남긴 조각이라 채점해도 의미가 없습니다."
+        ),
+    )
+    scored = scored_index()
+    summaries = _selectable_rows(traces, only_scorable=only_scorable, scored=scored)
     if not summaries:
-        st.warning("공용 로그에 사용할 수 있는 트레이스가 없습니다. 다시 수집하세요.")
+        st.warning("조건에 맞는 트레이스가 없습니다. 필터를 끄거나 로그를 다시 수집하세요.")
         return
+    judged = sum(1 for row in summaries if row.get("채점 여부") == "O")
+    st.caption(
+        f"{len(summaries):,}건 / 수집 {len(traces):,}건 · 채점 완료 {judged:,}건 · "
+        f"미채점 {len(summaries) - judged:,}건"
+    )
 
-    frame = pd.DataFrame(summaries)
+    frame = pd.DataFrame(display_rows(summaries), columns=list(_COLUMN_ORDER))
     event = st.dataframe(
         frame,
         width="stretch",
         height=_TABLE_HEIGHT,
         hide_index=True,
-        column_order=[column for column in _COLUMN_ORDER if column in frame.columns],
+        column_config={
+            "env": st.column_config.TextColumn("env", width="small"),
+            "task_time": st.column_config.TextColumn("task_time", width="small"),
+            "total_cost": st.column_config.TextColumn("total_cost", width="small"),
+            "채점 여부": st.column_config.TextColumn("채점 여부", width="small"),
+            "채점 시각": st.column_config.TextColumn("채점 시각", width="small"),
+        },
         on_select="rerun",
         selection_mode="single-row",
         key="tr_table",
@@ -306,11 +307,9 @@ def render() -> None:
 
     summary = _picked_row(summaries, event.selection)
     if summary is None:
-        st.info("위 목록에서 행을 클릭하면 여기에 처리 과정과 채점이 나타납니다.")
+        st.info("위 목록에서 행을 클릭하면 여기에 원본 상태·근거·채점이 나타납니다.")
         return
     selected = str(summary["id"])
-
-    # 상세 조회는 그 트레이스가 있는 프로젝트로 보내야 한다.
     env = environments.of(summary)
 
     detail_cache = st.session_state.setdefault("tr_detail", {})
@@ -327,32 +326,109 @@ def render() -> None:
     tj_cache = st.session_state.setdefault("tr_tracejson", {})
     if selected not in tj_cache:
         tj_cache[selected] = build_trace_json(detail)
-    tj = tj_cache[selected]
+    trace_json = tj_cache[selected]
 
     st.divider()
     st.markdown(
         f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`  ·  "
         f"{environments.label(env)}"
     )
-    siblings = [
-        row for row in summaries if row.get("taskId") and str(row["taskId"]) == task_id
-    ]
-    if len(siblings) > 1:
-        st.caption(
-            f"같은 taskId 의 트레이스가 {len(siblings)}개 있습니다. 위 목록에서 taskId 로 검색해 "
-            "다른 트레이스도 볼 수 있습니다."
+
+    stage_view.render_source_status(trace_json)
+    stage_view.render_run_cost(trace_json, summary)
+
+    with st.expander(f"처리 과정 (steps {len(trace_json['process']['steps'])}개)", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "순서": step["order"],
+                        "단계": step["name"],
+                        "유형": step["type"],
+                        "상태": step.get("level"),
+                        "구분": ", ".join(f"{k}={v}" for k, v in (step.get("metadata") or {}).items()),
+                        "GEN": len(step["generationRefs"]),
+                    }
+                    for step in trace_json["process"]["steps"]
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
         )
+        st.caption("최종 타임라인")
+        st.json(trace_json["result"]["timeline"] or {}, expanded=False)
 
-    cols = st.columns(4)
-    cols[0].metric("관측치", tj["langfuse"]["observationCount"])
-    cols[1].metric("처리 단계", len(tj["process"]["steps"]))
-    cols[2].metric("LLM 호출", len(tj["process"]["generations"]))
-    cols[3].metric("최종 event", len((tj["result"]["timeline"] or {}).get("events") or []))
+    evidences = {item.key: item for item in evidence_mod.build_all(trace_json)}
+    record = evaluation_record.load(task_id)
+    if record is not None and evaluation_record.is_legacy(record):
+        st.warning(
+            "이 Task 에는 구버전(7기준 0~10점) 채점 결과가 있습니다. 읽기 전용이며, 새로 채점하면 "
+            "단계별 결과로 다시 쌓입니다."
+        )
+        record = None
 
-    if st.button("처리과정 저장 (trace.json)", key=f"save_{selected}"):
-        store.save_json(task_trace_file(task_id), tj)
-        st.toast(f"저장: tasks/{task_id}/trace.json")
+    st.subheader("단계별 채점")
+    composite = (record or {}).get("composite") or {}
+    head = st.columns(4)
+    head[0].metric("종합 스코어", f"{composite.get('score')}/100" if composite.get("score") is not None else "-")
+    head[1].metric("채점한 단계", f"{composite.get('evaluatedCount', 0)}/{len(evidences)}")
+    head[2].metric("채점 가능", sum(1 for item in evidences.values() if item.applicable))
+    head[3].metric("LLM", llm_provider_label().split(" · ")[0])
 
-    _render_process(tj)
+    st.caption("토큰·실행(초)은 대상 서버가 그 단계에 쓴 값입니다. 비용은 트레이스 단위라 위에만 나옵니다.")
+    stage_view.wrapped_table(
+        stage_view.stage_rows(list(evidences.values()), record),
+        (
+            ("stage", "평가 대상", 17),
+            ("input", "입력", 20),
+            ("state", "근거 상태", 19),
+            ("_num_tokens", "토큰 입력/출력(합계)", 14),
+            ("_num_seconds", "실행(초)", 8),
+            ("_num_total", "총점", 9),
+            ("judged", "채점 시각", 13),
+        ),
+    )
 
-    _render_scoring(selected, task_id, detail, env)
+    def judge(stage_keys: list[str]) -> None:
+        _run_judge(
+            trace_json=trace_json,
+            stage_keys=stage_keys,
+            task_id=task_id,
+            trace_id=selected,
+            env=env,
+            evidences=evidences,
+            workers=int(st.session_state.get(f"workers_{selected}", 3)),
+            trace_meta={
+                "cost": summary.get("total_cost"),
+                "latency": summary.get("latency"),
+                "tokens": ((trace_json.get("operation") or {}).get("tokenUsage") or {}).get("totalTokens"),
+            },
+        )
+        st.rerun()
+
+    setup_error = llm_setup_error()
+    run_column, worker_column, note_column = st.columns([1, 1, 2], vertical_alignment="bottom")
+    scorable = [key for key, item in evidences.items() if item.applicable]
+    if run_column.button(
+        f"전체 채점 ({len(scorable)}개 단계)",
+        type="primary",
+        disabled=bool(setup_error) or not scorable,
+        width="stretch",
+        key=f"judge_all_{selected}",
+    ):
+        judge(scorable)
+    worker_column.number_input(
+        "동시 실행", min_value=1, max_value=8, value=3, key=f"workers_{selected}",
+        help="단계 하나에 수 분이 걸립니다. 동시에 몇 개까지 돌릴지 정합니다.",
+    )
+    note_column.caption(
+        f"LLM Provider: {llm_provider_label()}" + (f"\n\n{setup_error}" if setup_error else "")
+    )
+
+    for item in evidences.values():
+        _render_stage(
+            stage_evidence=item,
+            record=record,
+            trace_id=selected,
+            on_judge=judge,
+        )

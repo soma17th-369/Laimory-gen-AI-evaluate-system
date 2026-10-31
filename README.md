@@ -92,13 +92,14 @@ LangFuse 프로젝트가 개발·운영으로 나뉘어 있어도 **화면은 �
 
 | 페이지 | 하는 일 |
 | --- | --- |
-| 📊 대시보드 | 수집된 로그의 건수·비용·latency·이름별 분포 |
-| 📥 LangFuse 로그 수집 | 로그를 로컬에 누적 저장. 다른 페이지는 여기서 쌓은 로그만 씁니다 |
-| 🔍 Task 리뷰·채점 | taskId 단위로 처리 과정·프롬프트를 보고 judge 로 채점 |
-| 📋 채점 결과 | 저장된 채점 결과와 20개 정량 Metric 비교 |
-| 🛠 개선책 | 채점 결과에서 프롬프트 개선 방향 도출. 반영 여부·시기도 여기서 관리 |
-| 📈 개선 history | 반영된 개선책을 시간 순으로 놓고 반영 전후의 점수·비용·토큰·모델 변화 비교 |
-| 🧪 테스트 데이터 | 개선책 또는 실제 로그 input 으로 테스트 스위트 생성 |
+| 대시보드 | 수집된 로그의 건수·비용·latency·이름별 분포 |
+| LangFuse 로그 수집 | 로그를 로컬에 누적 저장. 다른 페이지는 여기서 쌓은 로그만 씁니다 |
+| Task 리뷰·채점 | 원본 데이터 상태 · 각 단계가 본 근거 · 채점 결과를 한 화면에서 보고 Agent 별로 채점 |
+| 채점 결과 | 채점 실행 이력. Task → 채점 실행 → 단계 순으로 좁혀 보고, 대상 파이프라인이 쓴 토큰·시간·비용을 함께 기록 |
+| 개선책 | 채점 결과에서 프롬프트 개선 방향 도출. 반영 여부·시기도 여기서 관리 |
+| 개선 history | 반영된 개선책을 시간 순으로 놓고 반영 전후의 점수·비용·토큰·모델 변화 비교 |
+| 테스트 데이터 | 개선책 또는 실제 로그 input 으로 테스트 스위트 생성 |
+| 채점 기준 설정 | 평가 대상별 채점 항목·배점·확인 기준 편집(Task 리뷰의 각 단계에서도 같은 표를 고칠 수 있음) |
 
 ## 로그 수집 방식
 
@@ -119,9 +120,11 @@ data/
 ├── collection.json         # 누적 수집된 트레이스 요약 (개발·운영 합계, 최신순, id 유일)
 ├── collection.state.json   # 증분 동기화 커서 (환경별: {"dev": …, "prod": …})
 ├── generations.json        # traceId → 모델·토큰 롤업 캐시
-├── tasks/<taskId>/         # trace.json · prompts.json
-├── evaluations/<taskId>.json
-├── prompts/<이름>/v<n>.json  # 편집 가능한 프롬프트 버전
+├── tasks/<taskId>/         # trace.json (schemaVersion 2 · 단계별 근거 포함)
+├── evaluations/<taskId>.json  # 단계별 최신 채점 결과 + 종합 스코어
+├── evaluations/history/<taskId>.jsonl  # 채점 실행 이력(한 줄 = 단계 1회 채점)
+├── rubrics/<stageKey>.json    # 화면에서 고친 채점 항목(없으면 메트릭 문서 기본값)
+├── prompts/<이름>/v<n>.json  # 채점에 실제로 쓴 기준 본문 기록
 ├── improvements/
 └── testdata/
 ```
@@ -135,8 +138,19 @@ data/
 ## 개발
 
 ```powershell
-.venv\Scripts\python.exe -m unittest tests.test_collection_sync tests.test_environments tests.test_v4_rubric tests.test_evaluation_results_ui tests.test_improvement_history
+.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 ```
+
+채점 기준의 정본은 [assets/rubrics/laimory-metric-v5.md](assets/rubrics/laimory-metric-v5.md)
+입니다. 평가 대상 8개(Location·Calendar·Notification·Photo Event Agent, Timeline, Repair,
+Question, User Memory)를 각각 100점으로 채점하고, 문서의 해당 절 원문이 그대로 채점 프롬프트가
+됩니다. 배점을 고치면 `app/analysis/stages.py` 도 같은 커밋에서 고쳐야 합니다(검사에 걸립니다).
+문서를 건드리지 않고 기준만 바꾸려면 **채점 기준 설정** 페이지에서 고칩니다(`data/rubrics/` 에
+저장되고 다음 채점부터 프롬프트에 반영됩니다).
+
+채점 프롬프트에는 세부 점수 환산 규칙과 단계별 채점 예시가 함께 들어갑니다. AI가 세부 기준별
+통과·실패 건수를 판정하면 코드가 항목 점수를 계산합니다. 질문 생성 수·길이는 코드가 직접
+확인합니다. 적용 범위·저장 호환·반복 검증 방법은 [채점 재현성 계약](docs/채점-재현성-계약.md)을 참고합니다.
 
 - 작업 지침: [AGENT.md](AGENT.md)
 - 계약·용어 문서: [.agents/knowledge/](.agents/knowledge/README.md)

@@ -12,12 +12,33 @@ from app.ui import improvement as improvement_ui
 from app.ui import testdata as testdata_ui
 
 
-def _scorecard() -> SimpleNamespace:
-    return SimpleNamespace(
-        overall=SimpleNamespace(score=8),
-        summary="종합 평가",
-        findings=[],
-    )
+def _scorecard() -> dict:
+    """단계별 채점 결과 레코드(evaluation_record 형식)."""
+    return {
+        "schemaVersion": 2,
+        "taskId": "task-1",
+        "composite": {"score": 80.0},
+        "stages": {
+            "timeline": {
+                "scorecard": {
+                    "label": "Timeline Agent",
+                    "total": 80.0,
+                    "summary": "요약",
+                    "items": [],
+                    "deductions": [
+                        {
+                            "itemKey": "day_flow",
+                            "severity": "HIGH",
+                            "description": "마지막 이동이 빠졌다",
+                            "sourceRefs": ["move-1"],
+                            "outputPath": "events[3]",
+                        }
+                    ],
+                    "alerts": [],
+                }
+            }
+        },
+    }
 
 
 class LlmProviderRoutingTests(unittest.TestCase):

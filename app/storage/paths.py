@@ -75,12 +75,32 @@ def prompt_version_file(name: str, version: int) -> Path:
     return prompt_dir(name) / f"v{int(version)}.json"
 
 
+def rubric_dir() -> Path:
+    """화면에서 고친 채점 항목의 저장 위치. 파일이 없으면 메트릭 문서 기본값을 쓴다."""
+    return data_root() / "rubrics"
+
+
+def rubric_file(stage_key: str) -> Path:
+    return rubric_dir() / f"{_safe(stage_key)}.json"
+
+
 def evaluations_dir() -> Path:
     return data_root() / "evaluations"
 
 
 def evaluation_file(task_id: str) -> Path:
+    """Task 의 **최신** 채점 결과(단계별 1건씩)."""
     return evaluations_dir() / f"{_safe(task_id)}.json"
+
+
+def evaluation_history_dir() -> Path:
+    """채점 **실행 이력**. 같은 단계를 여러 번 채점해도 전부 남는다."""
+    return evaluations_dir() / "history"
+
+
+def evaluation_history_file(task_id: str) -> Path:
+    """Task 하나의 채점 실행 이력(JSON Lines, 한 줄이 단계 1회 채점)."""
+    return evaluation_history_dir() / f"{_safe(task_id)}.jsonl"
 
 
 def improvements_dir() -> Path:

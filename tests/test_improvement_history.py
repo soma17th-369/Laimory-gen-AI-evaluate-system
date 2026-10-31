@@ -30,9 +30,15 @@ def _row(minutes: int, *, name: str = "generate-timeline", task_id: str | None =
     }
 
 
-def _evaluation(task_id: str, overall: int, *, grounding: int | None = None) -> dict:
-    scores = {"grounding": {"score": grounding}} if grounding is not None else {}
-    return {"taskId": task_id, "scorecard": {"overall": {"score": overall}, "scores": scores}}
+def _evaluation(task_id: str, composite: float, *, timeline: float | None = None) -> dict:
+    """단계별 채점 결과 레코드(100점 만점). 종합은 채점된 대상들의 평균이다."""
+    stage_scores = {"timeline": timeline} if timeline is not None else {}
+    return {
+        "schemaVersion": 2,
+        "taskId": task_id,
+        "composite": {"score": composite, "stageScores": stage_scores},
+        "stages": {},
+    }
 
 
 class ImprovementRecordTests(unittest.TestCase):
@@ -129,13 +135,13 @@ class SegmentTests(unittest.TestCase):
 class AggregateTests(unittest.TestCase):
     def test_score_counts_each_task_once_even_with_several_traces(self) -> None:
         rows = [_row(1, task_id="task-1"), _row(2, task_id="task-1"), _row(3, task_id="task-2")]
-        evaluations = {"task-1": _evaluation("task-1", 4), "task-2": _evaluation("task-2", 8)}
+        evaluations = {"task-1": _evaluation("task-1", 40), "task-2": _evaluation("task-2", 80)}
 
         result = compare.aggregate(rows, evaluations=evaluations, rollup={})
 
         self.assertEqual(result.traces, 3)
         self.assertEqual(result.score_n, 2)
-        self.assertEqual(result.score_avg, 6.0)
+        self.assertEqual(result.score_avg, 60.0)
 
     def test_models_and_tokens_come_from_the_rollup_only(self) -> None:
         rows = [_row(1, trace_id="a"), _row(2, trace_id="b")]
@@ -171,7 +177,7 @@ class DeltaTests(unittest.TestCase):
         self.assertIs(deltas["cost_avg"].improved, True)
 
     def test_lower_score_after_counts_as_worse(self) -> None:
-        evaluations = {"before": _evaluation("before", 8), "after": _evaluation("after", 5)}
+        evaluations = {"before": _evaluation("before", 80), "after": _evaluation("after", 50)}
         deltas = self._deltas([_row(-1, task_id="before")], [_row(1, task_id="after")], evaluations)
 
         self.assertIs(deltas["score"].improved, False)
@@ -191,20 +197,49 @@ class DeltaTests(unittest.TestCase):
         self.assertIsNone(deltas["traces"].improved)
 
 
+class StageDeltaTests(unittest.TestCase):
+    """어느 Agent 가 좋아지고 나빠졌는지가 개선의 근거다."""
+
+    def test_stage_scores_are_compared_per_target(self) -> None:
+        before = compare.aggregate(
+            [_row(-1, task_id="before")],
+            evaluations={"before": _evaluation("before", 60, timeline=50)},
+            rollup={},
+        )
+        after = compare.aggregate(
+            [_row(1, task_id="after")],
+            evaluations={"after": _evaluation("after", 80, timeline=90)},
+            rollup={},
+        )
+
+        deltas = {delta.key: delta for delta in compare.stage_deltas(before, after)}
+
+        self.assertEqual(list(deltas), ["timeline"])
+        self.assertEqual(deltas["timeline"].label, "Timeline Agent")
+        self.assertEqual(deltas["timeline"].diff, 40.0)
+        self.assertIs(deltas["timeline"].improved, True)
+        self.assertEqual(deltas["timeline"].unit, "/100")
+
+    def test_targets_without_scores_are_left_out(self) -> None:
+        empty = compare.aggregate([], evaluations={}, rollup={})
+
+        self.assertEqual(compare.stage_deltas(empty, empty), [])
+
+
 class ResultRowTests(unittest.TestCase):
     def test_rows_are_newest_first_and_carry_model_and_score(self) -> None:
         rows = [_row(1, trace_id="a", task_id="task-1"), _row(5, trace_id="b")]
         rollup = {"b": {"models": ["gpt-5.4-mini"], "totalTokens": 700}}
 
         listed = compare.result_rows(
-            rows, evaluations={"task-1": _evaluation("task-1", 7)}, rollup=rollup
+            rows, evaluations={"task-1": _evaluation("task-1", 70)}, rollup=rollup
         )
 
         self.assertEqual([r["traceId"] for r in listed], ["b", "a"])
         self.assertEqual(listed[0]["모델"], "gpt-5.4-mini")
         self.assertEqual(listed[0]["토큰"], 700)
         self.assertIsNone(listed[1]["모델"])
-        self.assertEqual(listed[1]["종합점수"], 7)
+        self.assertEqual(listed[1]["종합점수"], 70)
 
     def test_each_result_row_reports_the_project_it_came_from(self) -> None:
         rows = [

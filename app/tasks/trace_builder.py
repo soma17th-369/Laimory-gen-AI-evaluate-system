@@ -1,23 +1,62 @@
-"""LangFuse 트레이스 → `trace.json` 정규화 (안내 명세 준수).
+"""LangFuse 트레이스 → `trace.json` 정규화 (schemaVersion 2).
 
-명세 핵심: source→process→result→operation 4역할 분리 + **중복 금지**.
-- 최종 타임라인 정본 = `result.timeline`(main-agent). 다른 step 은 저장하지 않는다.
-- 프롬프트 정본 = `process.generations[].input`. step 은 `generationRefs` 로만 가리킨다.
-- 수집 원본 정본 = `source.*`(trace.input.request). step 은 `inputRefs` 로 가리킨다.
-- 운영 메타 = `operation`(trace.output). 타임라인과 완전 분리.
+명세 핵심은 그대로다: source→process→result→operation 4역할 분리 + **중복 금지**. v2 에서
+바뀐 것은 **단계별 채점에 필요한 근거를 버리지 않는다**는 점이다.
 
-주: `inputRefs` 의 의미적 참조 추론과 "의미 있는 step" 선별은 실물 관측치 이름이 명세 예시와
-정확히 일치하지 않으므로 **휴리스틱**이다(store/finalize→result.timeline, 하위 GENERATION 이름으로
-source 추정). 나머지는 비우고 사람이 process.steps 순서로 흐름을 읽게 한다. — 필요시 규칙 보강.
+- v1 은 step 의 `timeline` 키를 전부 지우고 `step.input`·`generation.output` 을 저장하지 않았다.
+  그 결과 저장된 trace.json 만으로는 "Timeline Agent 가 무엇을 받아 무엇을 만들었는지"를 알 수
+  없었다. LangFuse 보존기간이 30일이라 지나면 복구도 안 된다.
+- v2 는 그 셋을 모두 담되, **같은 내용을 두 번 담지 않는다.** 반복되는 큰 값(프롬프트·타임라인
+  스냅샷)은 `process.blobs` 에 한 번만 넣고 나머지는 참조(`…Ref`)로 가리킨다.
+
+정본 규칙:
+
+- 수집 원본 정본 = `source.*`(trace.input.request). step 의 `request` 는 저장하지 않고
+  `inputRefs` 로 가리킨다.
+- 최종 타임라인 정본 = `result.timeline`. 단계별 중간 타임라인은 `step.timelineRef` 로 blob 을
+  가리키고, 같은 내용이면 같은 ref 를 공유한다.
+- 프롬프트·LLM 출력 정본 = `process.generations[].inputRef`·`outputRef`(blob).
+- 단계 식별자는 `step.metadata`(agent·sourceStage·iteration·tool·phase)와 `level` 이다.
+  이름 문자열 대신 이 값을 쓴다(툴 실행은 이름에 괄호가 붙어 나오는 사례가 있다).
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
-from app.analysis.judge import find_final_timeline
+SCHEMA_VERSION = 2
+
+# 최종 타임라인을 담는 관측치 이름 우선순위. main agent 그래프의 산출 위치(AGENT.md 참고).
+_TIMELINE_OBS_PRIORITY = ("main-agent", "question-agent", "store-timeline")
 
 _GENERATION = "GENERATION"
+
+# step.output 에서 그 시점 타임라인을 **보존할** 단계. 나머지는 통과 중복이라 버린다.
+_TIMELINE_STEPS = frozenset(
+    {
+        "main-agent",
+        "timeline-agent",
+        "repair-agent",
+        "question-agent",
+        "confirm-timeline-draft",
+        "confirm-repair-iteration",
+    }
+)
+
+# step.input·output 에서 다른 정본과 겹치는 키. 저장하지 않고 참조로 대신한다.
+_DROPPED_INPUT_KEYS = frozenset(
+    {
+        "request",  # → source.*
+        "timeline",  # → 직전 단계의 timelineRef
+        "mergedResult",  # → merge-event-results.output.mergedResult
+        "eventResults",  # → event-agent-*.output.result
+        "system",  # → 하위 GENERATION 의 프롬프트
+        "prompt",
+    }
+)
+_DROPPED_OUTPUT_KEYS = frozenset({"timeline", "snapshot", "request"})
 
 # 하위 GENERATION 이름 키워드 → source 참조 (inputRefs 휴리스틱)
 _SOURCE_BY_KEYWORD = {
@@ -28,10 +67,87 @@ _SOURCE_BY_KEYWORD = {
     "health": ["source.healths"],
 }
 
+_META_KEYS = ("agent", "sourceStage", "iteration", "maxIterations", "tool", "phase", "stage", "imageCount")
+"""단계 판정에 쓰는 metadata 키만 남긴다. resourceAttributes 같은 SDK 잡음은 버린다."""
+
+
+class _BlobPool:
+    """같은 내용을 한 번만 저장하고 참조를 돌려주는 pool."""
+
+    def __init__(self) -> None:
+        self.blobs: dict[str, Any] = {}
+        self._by_digest: dict[str, str] = {}
+
+    def put(self, value: Any) -> str | None:
+        """값을 넣고 참조 키를 돌려준다. `None` 은 저장하지 않는다."""
+        if value is None:
+            return None
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            encoded = str(value)
+        digest = hashlib.sha1(encoded.encode("utf-8")).hexdigest()[:12]
+        ref = self._by_digest.get(digest)
+        if ref is None:
+            ref = f"b{len(self.blobs) + 1}"
+            self._by_digest[digest] = ref
+            self.blobs[ref] = value
+        return ref
+
+
+def resolve(trace_json: dict, ref: str | None) -> Any:
+    """`…Ref` 값을 실제 내용으로 돌려준다. 없으면 None."""
+    if not ref:
+        return None
+    return ((trace_json.get("process") or {}).get("blobs") or {}).get(ref)
+
+
+def _observation_timeline(observation: Any) -> Any:
+    """관측치 output 에서 events 배열을 가진 timeline dict 를 꺼낸다. 없으면 None."""
+    out = getattr(observation, "output", None)
+    if isinstance(out, dict):
+        timeline = out.get("timeline")
+        if isinstance(timeline, dict) and isinstance(timeline.get("events"), list):
+            return timeline
+    return None
+
+
+def find_final_timeline(trace_detail: Any) -> Any:
+    """트레이스에서 최종 타임라인(events 포함)을 찾는다.
+
+    실제 산출물은 ``trace.output``(운영 메타)이 아니라 관측치 output 의 ``timeline`` 에 있다.
+    main-agent(오케스트레이터 최종 결과)를 우선하고, 없으면 다른 관측치를 훑는다.
+    """
+    observations = list(getattr(trace_detail, "observations", []) or [])
+    by_name = {getattr(o, "name", None): o for o in observations}
+    for name in _TIMELINE_OBS_PRIORITY:
+        observation = by_name.get(name)
+        if observation is not None:
+            timeline = _observation_timeline(observation)
+            if timeline is not None:
+                return timeline
+    for observation in observations:
+        timeline = _observation_timeline(observation)
+        if timeline is not None:
+            return timeline
+    return None
+
 
 def _obs_type(observation: Any) -> Any:
     t = getattr(observation, "type", None)
     return getattr(t, "value", t)
+
+
+def _level(observation: Any) -> Any:
+    level = getattr(observation, "level", None)
+    return getattr(level, "value", level)
+
+
+def _metadata(observation: Any) -> dict:
+    raw = getattr(observation, "metadata", None)
+    if not isinstance(raw, dict):
+        return {}
+    return {key: raw[key] for key in _META_KEYS if key in raw}
 
 
 def _usage(observation: Any) -> Any:
@@ -52,12 +168,24 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _step_output(output: Any) -> Any:
-    """단계의 의미 있는 새 출력만. 최종 타임라인 중복(`timeline` 키)은 제거한다."""
-    if not isinstance(output, dict):
-        return output or None
-    cleaned = {k: v for k, v in output.items() if k != "timeline"}
+def _without(payload: Any, dropped: frozenset[str]) -> Any:
+    """dict 에서 중복 정본 키만 뺀다. 남는 게 없으면 None."""
+    if not isinstance(payload, dict):
+        return payload or None
+    cleaned = {key: value for key, value in payload.items() if key not in dropped}
     return cleaned or None
+
+
+def _step_timeline(observation: Any) -> Any:
+    """그 단계가 확정한 타임라인. 보존 대상 단계가 아니면 None."""
+    if getattr(observation, "name", None) not in _TIMELINE_STEPS:
+        return None
+    output = getattr(observation, "output", None)
+    if isinstance(output, dict):
+        timeline = output.get("timeline")
+        if isinstance(timeline, dict):
+            return timeline
+    return None
 
 
 def _input_refs(name: str, child_generation_names: list[str]) -> list[str]:
@@ -79,12 +207,18 @@ def build_trace_json(trace_detail: Any) -> dict:
     trace_input = getattr(trace_detail, "input", None) or {}
     request = trace_input.get("request", {}) if isinstance(trace_input, dict) else {}
     trace_output = getattr(trace_detail, "output", None) or {}
+    pool = _BlobPool()
 
-    # task
+    # task ← 트레이스 식별 정보. 어느 흐름(timeline·user-memory)인지도 여기서 정한다.
     task = {
         "taskId": trace_input.get("taskId") if isinstance(trace_input, dict) else None,
         "dailyRecordId": trace_input.get("dailyRecordId") if isinstance(trace_input, dict) else None,
         "window": trace_input.get("window") if isinstance(trace_input, dict) else None,
+        "traceId": getattr(trace_detail, "id", None),
+        "traceName": getattr(trace_detail, "name", None),
+        "sessionId": getattr(trace_detail, "session_id", None),
+        "tags": list(getattr(trace_detail, "tags", None) or []),
+        "timestamp": _iso(getattr(trace_detail, "timestamp", None)),
     }
 
     # source ← trace.input.request (정본)
@@ -100,7 +234,7 @@ def build_trace_json(trace_detail: Any) -> dict:
         "healths": request.get("healths") or [],
     }
 
-    # generations ← GENERATION 관측치 (프롬프트 정본)
+    # generations ← GENERATION 관측치. 프롬프트·출력은 blob 으로 한 번만 저장한다.
     generations = []
     for obs in observations:
         if _obs_type(obs) != _GENERATION:
@@ -111,7 +245,10 @@ def build_trace_json(trace_detail: Any) -> dict:
                 "stepId": getattr(obs, "parent_observation_id", None),
                 "name": getattr(obs, "name", None),
                 "model": getattr(obs, "model", None),
-                "input": getattr(obs, "input", None),
+                "level": _level(obs),
+                "metadata": _metadata(obs),
+                "inputRef": pool.put(getattr(obs, "input", None)),
+                "outputRef": pool.put(getattr(obs, "output", None)),
                 "usage": _usage(obs),
             }
         )
@@ -135,8 +272,14 @@ def build_trace_json(trace_detail: Any) -> dict:
                 "parentId": getattr(obs, "parent_observation_id", None),
                 "order": order,
                 "startedAt": _iso(getattr(obs, "start_time", None)),
+                "endedAt": _iso(getattr(obs, "end_time", None)),
+                "level": _level(obs),
+                "statusMessage": getattr(obs, "status_message", None),
+                "metadata": _metadata(obs),
                 "inputRefs": _input_refs(getattr(obs, "name", None), child_gen_names),
-                "output": _step_output(getattr(obs, "output", None)),
+                "input": _without(getattr(obs, "input", None), _DROPPED_INPUT_KEYS),
+                "output": _without(getattr(obs, "output", None), _DROPPED_OUTPUT_KEYS),
+                "timelineRef": pool.put(_step_timeline(obs)),
                 "generationRefs": [g["id"] for g in child_gens],
             }
         )
@@ -145,12 +288,13 @@ def build_trace_json(trace_detail: Any) -> dict:
     result = {"timeline": find_final_timeline(trace_detail)}
 
     # operation ← trace.output (운영 메타, 타임라인과 분리)
-    operation = dict(trace_output) if isinstance(trace_output, dict) else {}
+    operation = _without(trace_output, frozenset({"timeline"})) or {}
 
     return {
+        "schemaVersion": SCHEMA_VERSION,
         "task": task,
         "source": source,
-        "process": {"steps": steps, "generations": generations},
+        "process": {"steps": steps, "generations": generations, "blobs": pool.blobs},
         "result": result,
         "operation": operation,
         "langfuse": {"observationCount": len(observations)},

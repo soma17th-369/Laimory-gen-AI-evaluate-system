@@ -30,10 +30,11 @@ Laimory 의 생성형 AI가 남긴 실행 로그를 분석해 **품질을 측정
   인증된 로컬 **Codex CLI**(`codex exec`)다. 각 호출은 ephemeral·read-only로 독립 실행하고,
   구조화 기능은 해당 Pydantic JSON Schema로 결과를 제한한다. OpenAI API 구현은 명시적으로만
   선택하는 deprecated 호환 provider이며 자동 fallback하지 않는다.
-- **확정**: 하루 타임라인 채점은 `judge-rubric` v4를 사용한다. grounding·temporal·place·
-  coverage·composition·writing·question의 7개 기준과 overall을 0~10으로 평가하며, 점수 전에
-  AI 서버 v3가 정의한 20개 정량 Metric을 계산한다. v4는 v2 전체 기준과 v3 Metric 원본을
-  합성한 버전이다.
+- **확정**: 채점은 **평가 대상(Agent) 8개를 각각 100점**으로 매기는 단계별 LLM-as-a-Judge다
+  (Location·Calendar·Notification·Photo Event Agent, Timeline, Repair, Question, User Memory).
+  채점 기준의 정본은 저장소에 둔 메트릭 문서(`assets/rubrics/laimory-metric-v5.md`)이고, 단계마다
+  그 문서의 해당 절 원문이 그대로 프롬프트가 된다. 종합 스코어는 채점된 대상들의 단순 평균이다.
+  자세한 계약은 [단계별 채점](stage-evaluation.md) 을 참고한다.
 - **미정**: 테스트 데이터 스키마의 최종 형태.
 - 실제 secret·token(LangFuse 키·Codex 인증·OpenAI 키 등)·사용자 원문·프롬프트 원문은 문서·운영 로그·
   저장소에 남기지 않는다.
