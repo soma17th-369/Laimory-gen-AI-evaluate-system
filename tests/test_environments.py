@@ -8,6 +8,7 @@ from unittest import mock
 from app import environments
 from app.config import Settings
 from app.langfuse_client import LangfuseNotConfigured, get_client
+from app.ui import env_filter
 
 
 def _settings(**overrides) -> Settings:
@@ -38,6 +39,33 @@ class EnvironmentOfRecordTests(unittest.TestCase):
             with self.subTest(env):
                 self.assertNotEqual(environments.label(env), env)
                 self.assertTrue(environments.short_label(env))
+
+
+class EnvironmentFilterTests(unittest.TestCase):
+    """화면의 환경 필터 — 한 목록을 유지한 채 고른 환경만 남긴다."""
+
+    rows = [
+        {"id": "p1", "env": "prod"},
+        {"id": "d1", "env": "dev"},
+        {"id": "old"},  # 환경 구분이 생기기 전 행 → dev
+        {"id": "p2", "env": "prod"},
+    ]
+
+    def test_keep_filters_by_environment_and_preserves_order(self) -> None:
+        ids = lambda rows: [row["id"] for row in rows]  # noqa: E731
+
+        self.assertEqual(ids(environments.keep(self.rows, (environments.PROD,))), ["p1", "p2"])
+        self.assertEqual(ids(environments.keep(self.rows, (environments.DEV,))), ["d1", "old"])
+        self.assertEqual(ids(environments.keep(self.rows, environments.ENVIRONMENTS)), ["p1", "d1", "old", "p2"])
+
+    def test_filter_choice_maps_to_environments(self) -> None:
+        self.assertEqual(env_filter.envs_for(env_filter.ALL), environments.ENVIRONMENTS)
+        self.assertEqual(env_filter.envs_for(None), environments.ENVIRONMENTS)
+        self.assertEqual(env_filter.envs_for(environments.PROD), (environments.PROD,))
+
+    def test_scope_label_names_the_filtered_range(self) -> None:
+        self.assertEqual(env_filter.scope_label(environments.ENVIRONMENTS), "개발·운영 합계")
+        self.assertEqual(env_filter.scope_label((environments.PROD,)), environments.label(environments.PROD))
 
 
 class CredentialResolutionTests(unittest.TestCase):

@@ -14,6 +14,9 @@ Task 리뷰가 "지금 채점하고 근거를 보는 화면"이라면 여기는 
 
 점수 옆에는 **대상 파이프라인이 쓴 비용**(그 단계의 토큰·시간, Task 전체 토큰·시간·비용)을 함께
 남긴다. LangFuse 로그에서 온 값이고 채점 점수에는 반영하지 않는다.
+
+Task 목록은 환경 필터(→ [app.ui.env_filter][])를 따른다. 채점 이력 한 줄마다 그 Task 가 온 `env` 가
+남아 있어서 그 값으로 거른다.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import streamlit as st
 
 from app import environments
 from app.analysis import evaluation_record
-from app.ui import stage_view
+from app.ui import env_filter, stage_view
 
 
 def _mean(values: list[float]) -> float | None:
@@ -168,6 +171,12 @@ def render() -> None:
         st.info("아직 채점 이력이 없습니다. Task 리뷰·채점에서 채점하면 여기에 쌓입니다.")
         return
 
+    envs = env_filter.pick()
+    runs = environments.keep(runs, envs)
+    if not runs:
+        st.info(f"{env_filter.scope_label(envs)}에서 채점한 이력이 없습니다.")
+        return
+
     st.subheader("① Task")
     tasks = task_rows(runs)
     task_event = st.dataframe(
@@ -177,7 +186,8 @@ def render() -> None:
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
-        key="er_tasks",
+        # 선택은 행 위치로 돌아오므로 필터가 바뀌면 key 를 바꿔 옛 선택이 다른 Task 를 가리키지 않게 한다.
+        key=f"er_tasks_{'-'.join(envs)}",
     )
     picked_task = list(getattr(task_event.selection, "rows", None) or [])
     if not picked_task:

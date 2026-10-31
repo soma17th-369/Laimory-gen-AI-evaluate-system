@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Collection, Iterable
 
 DEV = "dev"
 PROD = "prod"
@@ -71,3 +71,12 @@ def of(record: Any) -> str:
         if value in ENVIRONMENTS:
             return str(value)
     return DEV
+
+
+def keep(records: Iterable[Any], envs: Collection[str]) -> list[Any]:
+    """고른 환경에서 온 것만 남긴다. 순서는 그대로다.
+
+    어느 환경 것인지는 [of][app.environments.of] 로만 판단한다(`env` 가 없는 옛 행은 `dev`).
+    화면의 환경 필터가 로그·채점 레코드·채점 이력을 모두 이 함수로 거른다.
+    """
+    return [record for record in records if of(record) in envs]

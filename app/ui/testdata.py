@@ -2,6 +2,7 @@
 
 (a) 개선책 기반: 개선책이 실제 반영됐는지 검증할 테스트 케이스(입력+기대) 생성.
 (b) 로그 input 기반: 수집된 트레이스의 실제 input 을 추출해 그냥 테스트 실행용 데이터로 저장.
+    고를 수 있는 트레이스는 환경 필터(→ [app.ui.env_filter][])를 따른다.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from app.storage.paths import collection_file, improvements_dir, testdata_file
 from app.storage.store import list_json, load_json
 from app.testdata.generate import testsuite_to_json
 from app.testdata.schema import TestSuite
+from app.ui import env_filter
 
 _SYSTEM = (
     "개선책을 검증하기 위한 테스트 케이스(입력 + 기대 조건)를 만든다. 실명·실주소 금지(가상값). "
@@ -86,7 +88,11 @@ def _tab_from_logs() -> None:
     if not rows:
         st.info("먼저 **LangFuse 로그 수집** 페이지에서 로그를 수집하세요.")
         return
-    options = {r["id"]: r for r in rows if r.get("id")}
+    envs = env_filter.pick()
+    options = {r["id"]: r for r in environments.keep(rows, envs) if r.get("id")}
+    if not options:
+        st.info(f"{env_filter.scope_label(envs)}에서 수집된 트레이스가 없습니다.")
+        return
     picked = st.multiselect(
         "input 을 추출할 트레이스",
         options=list(options.keys()),

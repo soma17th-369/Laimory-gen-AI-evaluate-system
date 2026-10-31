@@ -20,7 +20,7 @@
 | 문서 | Scope | Read when | Related paths | Update when |
 | --- | --- | --- | --- | --- |
 | [domain/overview.md](domain/overview.md) | 시스템 목적·데이터 원천·처리 파이프라인 | 전체 그림·범위를 잡을 때 | (전역) | 목적·데이터 원천·파이프라인 단계가 바뀔 때 |
-| [domain/langfuse-environments.md](domain/langfuse-environments.md) | LangFuse 프로젝트(dev·prod)를 합쳐 보는 규칙 · 키 이름 · 환경이 갈리는 자리 | 환경을 늘리거나 키·조회 대상·환경 표시를 손댈 때 | `app/environments.py`·`app/config.py`·`app/langfuse_client.py`·`app/collect/` | 환경 키·자격증명 변수 이름·환경 표시 방식·합쳐 보는 범위가 바뀔 때 |
+| [domain/langfuse-environments.md](domain/langfuse-environments.md) | LangFuse 프로젝트(dev·prod)를 합쳐 보는 규칙 · 화면 공통 환경 필터 · 키 이름 · 환경이 갈리는 자리 | 환경을 늘리거나 키·조회 대상·환경 표시·환경 필터를 손댈 때 | `app/environments.py`·`app/ui/env_filter.py`·`app/config.py`·`app/langfuse_client.py`·`app/collect/` | 환경 키·자격증명 변수 이름·환경 표시 방식·합쳐 보는 범위·환경 필터 범위가 바뀔 때 |
 | [domain/collection-store.md](domain/collection-store.md) | 수집 저장소(`collection.json`) 누적·증분 동기화 계약 | 로그 수집·커서·스냅샷 소비 코드를 손댈 때 | `app/collect/`·`app/ui/log_collection.py`·`app/storage/paths.py` | 저장 파일·행 스키마·커서 의미·누적 규칙이 바뀔 때 |
 | [domain/improvement-record.md](domain/improvement-record.md) | 개선책 반영 상태 계약·전후 비교 규칙 | 개선책 상태·개선 history 를 손댈 때 | `app/improve/`·`app/ui/improvement*.py`·`app/collect/generations.py` | 레코드 필드·상태 값·구간 분할·표본 표기 규칙이 바뀔 때 |
 | [domain/stage-evaluation.md](domain/stage-evaluation.md) | 단계별 채점 계약(평가 대상 8개·근거 위치·총점 규칙·저장 포맷) | 채점 기준·근거 슬라이스·점수 계산·채점 결과 저장을 손댈 때 | `app/analysis/`·`assets/rubrics/`·`app/ui/task_review.py`·`app/ui/evaluation_results.py` | 평가 대상·배점·근거 범위·총점 규칙·저장 스키마가 바뀔 때 |

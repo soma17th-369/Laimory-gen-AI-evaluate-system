@@ -7,7 +7,8 @@
 (→ [app.collect.generations][]). 조회하지 않은 행은 `-` 로 남는다.
 
 로그는 개발·운영을 합쳐 시간순으로 본다(→ [app.environments][]). 결과 표의 `환경` 열이 어느
-프로젝트에서 온 행인지 알려주고, 모델·토큰 조회는 각 행이 온 프로젝트로 보낸다.
+프로젝트에서 온 행인지 알려주고, 모델·토큰 조회는 각 행이 온 프로젝트로 보낸다. 환경 필터
+(→ [app.ui.env_filter][])로 한 환경을 고르면 전후 비교·결과 목록이 모두 그 환경 로그로만 계산된다.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from app.collect.sync import parse_timestamp
 from app.improve import compare, records
 from app.storage import store
 from app.storage.paths import evaluations_dir
+from app.ui import env_filter
 
 _ROW_LIMIT = 50
 """구간마다 화면에 먼저 보여줄 결과 수. 모델·토큰 조회 대상도 이 목록이다."""
@@ -183,7 +185,7 @@ def render() -> None:
     st.title("개선 history")
     st.caption(
         "반영된 개선책을 시간 순으로 놓고, 반영 이후 결과가 실제로 달라졌는지 확인합니다. "
-        "개발·운영 로그를 합쳐 봅니다."
+        "환경 필터로 고른 프로젝트의 로그로 비교합니다."
     )
 
     rows = collect.load_rows()
@@ -199,12 +201,15 @@ def render() -> None:
         )
         return
 
+    envs = env_filter.pick()
+    rows = environments.keep(rows, envs)
     evaluations = _load_evaluations()
     rollup = generations.load_rollup()
     segments = compare.segments(applied)
 
     st.caption(
-        f"반영된 개선책 {len(segments)}개 · 수집 로그 {len(rows):,}건 · 채점된 task {len(evaluations)}개"
+        f"반영된 개선책 {len(segments)}개 · 수집 로그 {len(rows):,}건({env_filter.scope_label(envs)}) · "
+        f"채점된 task {len(evaluations)}개"
     )
     for order, segment in enumerate(segments, start=1):
         _render_segment(order, segment, rows, evaluations, rollup)
