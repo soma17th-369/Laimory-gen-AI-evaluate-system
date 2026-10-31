@@ -128,6 +128,30 @@ class CollectionSyncTests(unittest.TestCase):
         self.assertEqual(second.total, 6)
         self.assertTrue(second.completed)
 
+    def test_failed_sync_keeps_the_pages_it_already_received(self) -> None:
+        """조회가 중간에 실패해도(호출 한도 등) 받은 만큼 저장하고 다음 실행이 이어받는다."""
+        server = self._server([_trace(i) for i in range(1, 7)])
+        healthy = server.list_traces
+
+        def failing(**kwargs):
+            if kwargs["page"] == 3:
+                raise RuntimeError("rate limited")
+            return healthy(**kwargs)
+
+        with mock.patch.object(collect, "list_traces", failing):
+            with self.assertRaises(RuntimeError):
+                collect.sync(environments.DEV, page_size=2)
+
+        self.assertEqual([row["id"] for row in collect.load_rows()], ["t004", "t003", "t002", "t001"])
+        self.assertEqual(
+            collect.load_state(environments.DEV)["last_timestamp"], _trace(4).timestamp.isoformat()
+        )
+
+        second = collect.sync(environments.DEV, page_size=2)
+
+        self.assertEqual((second.added, second.total), (2, 6))
+        self.assertTrue(second.completed)
+
     def test_interrupted_backfill_does_not_skip_the_gap_below_older_snapshot_rows(self) -> None:
         """예전 스냅샷의 최신 행이 남아 있어도 커서는 훑은 구간의 끝까지만 전진해야 한다."""
         newest = _trace(99)

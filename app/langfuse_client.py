@@ -12,13 +12,21 @@ public key 로 구분해 들고 있으므로 서로 다른 프로젝트의 클�
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from langfuse import Langfuse
+from langfuse.api.core.api_error import ApiError
 
 from app import environments
 from app.config import get_settings
+
+RATE_LIMIT_MAX_WAITS = 5
+"""호출 한도(429)를 만났을 때 기다렸다가 다시 부르는 최대 횟수."""
+
+RATE_LIMIT_DEFAULT_WAIT_SECONDS = 60.0
+"""응답에 ``retry-after`` 가 없을 때 기다리는 시간."""
 
 
 class LangfuseNotConfigured(RuntimeError):
@@ -64,6 +72,27 @@ def get_client(env: str) -> Langfuse:
     return client
 
 
+def _wait_on_rate_limit(call: Callable[[], Any]) -> Any:
+    """호출 한도(429)에 걸리면 서버가 알려준 시간만큼 기다렸다가 다시 부른다.
+
+    LangFuse 는 ``GET /api/public/traces`` 를 분당 몇 회로 제한한다(2026-10 기준 5회). 한도는
+    잠깐 기다리면 풀리므로 실패로 올리지 않는다. 그래도 계속 막히면 마지막 오류를 그대로 올린다.
+    """
+    for _ in range(RATE_LIMIT_MAX_WAITS):
+        try:
+            return call()
+        except ApiError as exc:
+            if exc.status_code != 429:
+                raise
+            headers = {str(key).lower(): value for key, value in (exc.headers or {}).items()}
+            try:
+                seconds = float(headers.get("retry-after", RATE_LIMIT_DEFAULT_WAIT_SECONDS))
+            except (TypeError, ValueError):
+                seconds = RATE_LIMIT_DEFAULT_WAIT_SECONDS
+            time.sleep(seconds + 1)
+    return call()
+
+
 def list_traces(
     *,
     limit: int = 50,
@@ -84,16 +113,18 @@ def list_traces(
     콤마로 나열한다. 생략하면 전부 받는다(트레이스당 관측치까지 실려 목록 조회가 느려진다).
     """
     client = get_client(env)
-    return client.api.trace.list(
-        page=page,
-        limit=limit,
-        name=name or None,
-        user_id=user_id or None,
-        from_timestamp=from_timestamp,
-        to_timestamp=to_timestamp,
-        order_by=order_by or None,
-        fields=fields or None,
-        tags=list(tags) if tags else None,
+    return _wait_on_rate_limit(
+        lambda: client.api.trace.list(
+            page=page,
+            limit=limit,
+            name=name or None,
+            user_id=user_id or None,
+            from_timestamp=from_timestamp,
+            to_timestamp=to_timestamp,
+            order_by=order_by or None,
+            fields=fields or None,
+            tags=list(tags) if tags else None,
+        )
     )
 
 
