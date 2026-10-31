@@ -70,10 +70,13 @@ class Settings(BaseSettings):
     langfuse_prod_secret_key: SecretStr | None = None
     langfuse_prod_host: str | None = None
 
-    # 모든 LLM 기능의 공통 provider. 기본은 로컬에 로그인된 Codex CLI이고 OpenAI API는 호환용.
-    llm_provider: Literal["codex", "openai-api"] = "codex"
+    # 모든 LLM 기능의 공통 provider. 기본은 로컬에 로그인된 Codex CLI이고, 로컬에 로그인된
+    # Claude Code CLI(`claude`)도 고를 수 있다. OpenAI API는 호환용.
+    llm_provider: Literal["codex", "claude", "openai-api"] = "codex"
     codex_model: str | None = None
     codex_timeout_seconds: int = 600
+    claude_model: str | None = None
+    claude_timeout_seconds: int = 600
 
     # Deprecated OpenAI API provider 호환용.
     openai_api_key: SecretStr | None = None

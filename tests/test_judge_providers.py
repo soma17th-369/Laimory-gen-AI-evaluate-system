@@ -8,6 +8,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from app.analysis.providers import (
+    ClaudeCodeProvider,
+    ClaudeExecutionFailed,
+    ClaudeNotAuthenticated,
+    ClaudeNotInstalled,
+    ClaudeTimeout,
     CodexProvider,
     CodexExecutionFailed,
     CodexJudgeProvider,
@@ -21,6 +26,8 @@ from app.analysis.providers import (
     _strict_json_schema,
     get_judge_provider,
     get_llm_provider,
+    llm_provider_label,
+    llm_setup_error,
 )
 from app.analysis import stage_schema, stages
 from app.config import Settings
@@ -232,12 +239,152 @@ class CodexJudgeProviderTests(unittest.TestCase):
         self.assertTrue(all(set(item) == {"$ref"} for item in refs))
 
 
+_LOGGED_IN = json.dumps({"loggedIn": True, "authMethod": "claude.ai"})
+
+
+def _envelope(**fields) -> str:
+    """`claude -p --output-format json` 결과 envelope(실물에서 쓰는 필드만)."""
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False, **fields}, ensure_ascii=False)
+
+
+class ClaudeCodeProviderTests(unittest.TestCase):
+    def _run(self, stdout: str, *, returncode: int = 0, model: str | None = None, result_model=StageScorecard):
+        captured: dict = {}
+
+        def fake_run(command, **kwargs):
+            if command[1:3] == ["auth", "status"]:
+                return subprocess.CompletedProcess(command, 0, stdout=_LOGGED_IN, stderr="")
+            captured["command"] = command
+            captured["prompt"] = kwargs["input"]
+            captured["cwd"] = kwargs["cwd"]
+            # 시스템 프롬프트 파일은 호출이 끝나면 임시 디렉터리와 함께 사라지므로 여기서 읽는다.
+            system_path = Path(command[command.index("--system-prompt-file") + 1])
+            captured["system_prompt"] = system_path.read_text(encoding="utf-8")
+            if "--json-schema" in command:
+                captured["schema"] = json.loads(command[command.index("--json-schema") + 1])
+            return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
+
+        provider = ClaudeCodeProvider(model=model, timeout_seconds=123)
+        with (
+            mock.patch.object(ClaudeCodeProvider, "executable", return_value="claude.EXE"),
+            mock.patch("app.analysis.providers.subprocess.run", side_effect=fake_run),
+        ):
+            if result_model is None:
+                result = provider.generate_text(system_prompt="평가 기준", user_prompt="평가 입력")
+            else:
+                result = provider.evaluate(
+                    system_prompt="평가 기준",
+                    user_prompt="평가 입력",
+                    result_model=result_model,
+                )
+        return result, captured
+
+    def test_print_mode_is_isolated_and_reads_structured_output(self) -> None:
+        data = _scorecard_data()
+        result, captured = self._run(
+            _envelope(result=json.dumps(data, ensure_ascii=False), structured_output=data),
+            model="sonnet",
+        )
+
+        command = captured["command"]
+        self.assertEqual(result.items.reflection.score, 30)
+        self.assertIn("-p", command)
+        self.assertEqual(command[command.index("--output-format") + 1], "json")
+        self.assertIn("--no-session-persistence", command)
+        self.assertIn("--safe-mode", command)
+        self.assertEqual(command[command.index("--tools") + 1], "")
+        self.assertEqual(command[command.index("--model") + 1], "sonnet")
+        self.assertEqual(captured["system_prompt"], "평가 기준")
+        self.assertEqual(captured["prompt"], "평가 입력")
+        self.assertTrue(captured["cwd"].name.startswith("laimory-claude-llm-"))
+        self.assertFalse(captured["schema"]["additionalProperties"])
+
+    def test_general_text_output_does_not_request_schema(self) -> None:
+        result, captured = self._run(_envelope(result="  개선책 본문\n"), result_model=None)
+
+        self.assertEqual(result, "개선책 본문")
+        self.assertNotIn("--json-schema", captured["command"])
+
+    def test_empty_model_uses_cli_default(self) -> None:
+        data = _scorecard_data()
+        _, captured = self._run(_envelope(structured_output=data), model="  ")
+        self.assertNotIn("--model", captured["command"])
+
+    def test_missing_executable_has_setup_error_code(self) -> None:
+        with mock.patch.object(ClaudeCodeProvider, "executable", return_value=None):
+            with self.assertRaises(ClaudeNotInstalled) as caught:
+                ClaudeCodeProvider().generate_text(system_prompt="기준", user_prompt="입력")
+        self.assertEqual(caught.exception.code, "CLAUDE_NOT_INSTALLED")
+
+    def test_logged_out_status_is_not_authenticated(self) -> None:
+        for returncode, stdout in ((1, json.dumps({"loggedIn": False})), (0, json.dumps({"loggedIn": False}))):
+            status = subprocess.CompletedProcess(["claude", "auth", "status"], returncode, stdout, "")
+            with (
+                mock.patch.object(ClaudeCodeProvider, "executable", return_value="claude.EXE"),
+                mock.patch("app.analysis.providers.subprocess.run", return_value=status),
+            ):
+                with self.assertRaises(ClaudeNotAuthenticated) as caught:
+                    ClaudeCodeProvider().generate_text(system_prompt="기준", user_prompt="입력")
+            self.assertEqual(caught.exception.code, "CLAUDE_NOT_AUTHENTICATED")
+            self.assertIn("claude auth login", str(caught.exception))
+
+    def test_timeout_is_distinct(self) -> None:
+        def fake_run(command, **kwargs):
+            if command[1:3] == ["auth", "status"]:
+                return subprocess.CompletedProcess(command, 0, _LOGGED_IN, "")
+            raise subprocess.TimeoutExpired(command, timeout=1)
+
+        with (
+            mock.patch.object(ClaudeCodeProvider, "executable", return_value="claude.EXE"),
+            mock.patch("app.analysis.providers.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaises(ClaudeTimeout) as caught:
+                ClaudeCodeProvider(timeout_seconds=1).generate_text(system_prompt="기준", user_prompt="입력")
+        self.assertEqual(caught.exception.code, "CLAUDE_TIMEOUT")
+        self.assertIn("CLAUDE_TIMEOUT_SECONDS", str(caught.exception))
+
+    def test_error_envelope_is_execution_failed_with_cli_message(self) -> None:
+        # 실물: 실패해도 stdout에 is_error envelope가 오고 stderr는 비어 있다.
+        stdout = _envelope(is_error=True, result="Failed to refresh OAuth token: retry in a minute")
+        with self.assertRaises(ClaudeExecutionFailed) as caught:
+            self._run(stdout, returncode=1)
+        self.assertEqual(caught.exception.code, "CLAUDE_EXECUTION_FAILED")
+        self.assertIn("Failed to refresh OAuth token", str(caught.exception))
+
+    def test_auth_error_envelope_is_not_authenticated(self) -> None:
+        stdout = _envelope(is_error=True, result="Invalid API key · Please run /login")
+        with self.assertRaises(ClaudeNotAuthenticated):
+            self._run(stdout, returncode=1)
+
+    def test_invalid_json_and_schema_mismatch_are_distinct(self) -> None:
+        with self.assertRaises(InvalidJudgeOutput) as invalid:
+            self._run(_envelope(result="not-json"))
+        self.assertEqual(invalid.exception.code, "INVALID_JUDGE_OUTPUT")
+
+        with self.assertRaises(JudgeSchemaValidationFailed) as mismatch:
+            self._run(_envelope(result="{}", structured_output={}))
+        self.assertEqual(mismatch.exception.code, "SCHEMA_VALIDATION_FAILED")
+
+
 class JudgeProviderSelectionTests(unittest.TestCase):
     def test_codex_is_default_provider(self) -> None:
         settings = Settings(_env_file=None)
         with mock.patch("app.analysis.providers.get_settings", return_value=settings):
             self.assertIsInstance(get_llm_provider(), CodexProvider)
             self.assertIsInstance(get_judge_provider(), CodexJudgeProvider)
+
+    def test_claude_provider_is_selected_with_its_own_settings(self) -> None:
+        settings = Settings(
+            _env_file=None, llm_provider="claude", claude_model="opus", claude_timeout_seconds=42
+        )
+        with mock.patch("app.analysis.providers.get_settings", return_value=settings):
+            provider = get_llm_provider()
+            self.assertIsInstance(provider, ClaudeCodeProvider)
+            self.assertIsInstance(get_judge_provider(), ClaudeCodeProvider)
+            self.assertEqual((provider.model, provider.timeout_seconds), ("opus", 42))
+            self.assertEqual(llm_provider_label(), "Claude Code CLI · opus")
+            with mock.patch.object(ClaudeCodeProvider, "executable", return_value=None):
+                self.assertIn("claude auth login", llm_setup_error())
 
     def test_openai_api_provider_requires_explicit_selection(self) -> None:
         settings = Settings(_env_file=None, llm_provider="openai-api")
