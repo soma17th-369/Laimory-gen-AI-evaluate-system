@@ -96,6 +96,12 @@ def load_rows() -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+def _stored_rows() -> list[dict[str, Any]]:
+    """병합 기준 행. 깨진 저장소를 빈 목록으로 읽으면 쌓인 로그를 덮어쓰므로 여기서는 멈춘다."""
+    rows = store.read_json(collection_file())
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
 def rows_of(rows: Sequence[dict[str, Any]], env: str) -> list[dict[str, Any]]:
     """그 환경에서 온 행만."""
     return [row for row in rows if environments.of(row) == env]
@@ -170,7 +176,7 @@ def sync(
     backfill = full or needs_backfill(state)
     cursor = None if backfill else parse_timestamp(state.get("last_timestamp"))
 
-    merged = {row["id"]: row for row in load_rows() if row.get("id")}
+    merged = {row["id"]: row for row in _stored_rows() if row.get("id")}
     added = updated = fetched = pages = 0
     completed = False
     page = 1

@@ -106,7 +106,9 @@ def save_stages(
     trace_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """단계 채점 결과를 레코드에 합쳐 저장한다. 준 단계만 갱신한다."""
-    current = load(task_id)
+    # 깨진 레코드를 없는 것으로 읽으면 다른 단계의 점수를 덮어쓴다. 여기서는 멈춘다.
+    stored = store.read_json(evaluation_file(task_id))
+    current = stored if isinstance(stored, dict) else None
     record: dict[str, Any]
     if current is None or is_legacy(current):
         # 구버전 레코드는 덮어쓰지 않고 새 구조로 시작한다(구버전 파일은 legacy 키에 남긴다).
