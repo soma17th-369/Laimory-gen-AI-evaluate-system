@@ -40,6 +40,10 @@ from app.storage.paths import collection_file, collection_state_file
 PAGE_SIZE = 100
 """한 번의 API 호출로 받는 트레이스 수(LangFuse 페이지 크기)."""
 
+SAVE_EVERY_PAGES = 20
+"""수집 도중 저장하는 간격. 호출 한도 때문에 긴 수집은 몇 시간씩 걸릴 수 있다. 프로세스가 강제로 끝나면
+예외 처리도 돌지 않으므로, 받은 만큼 중간중간 남겨 다음 실행이 그 지점부터 이어받게 한다."""
+
 LIST_FIELDS = "core,io,metrics"
 """목록 조회에 필요한 필드 그룹만 받는다. taskId 는 ``io``(=trace.input), latency·total_cost 는
 ``metrics`` 에서 온다. 관측치·스코어는 저장 스키마에 쓰지 않으므로 제외해 응답을 가볍게 한다."""
@@ -164,11 +168,14 @@ def sync(
     page_size: int = PAGE_SIZE,
     max_pages: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> SyncResult:
     """한 환경의 LangFuse 로그를 받아 공용 저장소에 병합한다.
 
     커서가 없거나 `full` 이면 처음부터(=쌓인 로그 전체), 아니면 마지막으로 훑은 시각 이후만
     받는다. 어느 쪽이든 기존에 저장된 행은 지우지 않으며, **다른 환경의 행도 건드리지 않는다.**
+
+    `should_stop` 이 참이 되면 다음 페이지를 받지 않고 받은 만큼 저장한 뒤 끝낸다(`completed=False`).
     """
     environment = environments.validate(env)
     state = load_state(environment)
@@ -213,6 +220,8 @@ def sync(
 
     try:
         while max_pages is None or pages < max_pages:
+            if should_stop is not None and should_stop():
+                break
             response = list_traces(
                 page=page,
                 limit=page_size,
@@ -247,6 +256,8 @@ def sync(
             if not batch or (total_pages is not None and page >= total_pages):
                 completed = True
                 break
+            if pages % SAVE_EVERY_PAGES == 0:
+                persist()
             page += 1
     except BaseException:
         # 조회가 중간에 끊겨도(호출 한도·네트워크·화면 중단) 받은 만큼은 남긴다. 오름차순으로
@@ -276,6 +287,7 @@ def sync_all(
     page_size: int = PAGE_SIZE,
     max_pages: int | None = None,
     on_progress: Callable[[str, int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[SyncResult]:
     """여러 환경을 차례로 동기화한다. 결과는 넘긴 순서 그대로.
 
@@ -295,6 +307,7 @@ def sync_all(
                 page_size=page_size,
                 max_pages=max_pages,
                 on_progress=progress,
+                should_stop=should_stop,
             )
         )
     return results

@@ -132,8 +132,12 @@ LangFuse 프로젝트가 개발·운영으로 나뉘어 있어도 **화면은 �
 
 ## MCP
 
-에이전트가 쓸 도구 계약은 [MCP 명세](docs/MCP-명세.md) 에 있습니다. 서버는 아직 구현 전입니다
-([이슈 #12](https://github.com/soma17th-369/Laimory-gen-AI-evaluate-system/issues/12)).
+에이전트가 로그 수집·선택·채점을 직접 호출하는 로컬 MCP 서버가 있습니다. 결과는 화면에서도 그대로
+보입니다. 등록 방법과 도구 계약은 [MCP 명세](docs/MCP-명세.md) 에 있습니다.
+
+```powershell
+claude mcp add laimory-eval -- uv run --directory "<평가 도구 경로>" python -m app.mcp_server
+```
 
 ## 로그 수집 방식
 

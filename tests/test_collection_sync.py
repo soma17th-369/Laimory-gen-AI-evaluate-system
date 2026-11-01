@@ -152,6 +152,41 @@ class CollectionSyncTests(unittest.TestCase):
         self.assertEqual((second.added, second.total), (2, 6))
         self.assertTrue(second.completed)
 
+    def test_long_sync_saves_along_the_way(self) -> None:
+        """프로세스가 강제로 끝나면 예외 처리도 돌지 않는다. 그 전에 받은 만큼은 남아 있어야 한다."""
+        server = self._server([_trace(i) for i in range(1, 8)])
+        healthy = server.list_traces
+        seen_at_page_3: list[str] = []
+
+        def watching(**kwargs):
+            if kwargs["page"] == 3:
+                seen_at_page_3.extend(row["id"] for row in collect.load_rows())
+            return healthy(**kwargs)
+
+        with (
+            mock.patch.object(collect, "list_traces", watching),
+            mock.patch.object(collect, "SAVE_EVERY_PAGES", 2),
+        ):
+            collect.sync(environments.DEV, page_size=2)
+
+        self.assertEqual(sorted(seen_at_page_3), ["t001", "t002", "t003", "t004"])
+        self.assertEqual(len(collect.load_rows()), 7)
+
+    def test_stopped_sync_saves_what_it_received_and_resumes(self) -> None:
+        server = self._server([_trace(i) for i in range(1, 6)])
+        answers = iter([False, True])
+
+        first = collect.sync(environments.DEV, page_size=2, should_stop=lambda: next(answers))
+
+        self.assertFalse(first.completed)
+        self.assertEqual((first.pages, first.total), (1, 2))
+        self.assertEqual(len(server.calls), 1)
+
+        second = collect.sync(environments.DEV, page_size=2)
+
+        self.assertEqual((second.mode, second.total), ("incremental", 5))
+        self.assertTrue(second.completed)
+
     def test_broken_collection_stops_the_sync_instead_of_overwriting_it(self) -> None:
         """깨진 파일을 빈 목록으로 읽으면 쌓인 로그가 이번에 받은 행으로 덮어써진다."""
         server = self._server([_trace(1)])
