@@ -69,46 +69,49 @@ def judge(
     trace_meta: dict[str, Any] | None = None,
     on_stage: Callable[[str, Exception | None], None] | None = None,
 ) -> JudgeOutcome:
-    """선택한 단계를 채점하고 결과를 저장한다. 한 단계가 실패해도 나머지는 남긴다.
+    """선택한 단계를 채점하고 **단계가 끝날 때마다** 저장한다. 한 단계가 실패해도 나머지는 남긴다.
 
-    `on_stage` 는 단계가 끝날 때마다 (stageKey, 예외) 로 불린다. 화면 진행 표시에 쓴다.
+    프로세스가 도중에 끝나도 끝난 단계의 결과는 남는다. 함께 채점한 단계는 같은 `runId` 로 묶인다.
+    `on_stage` 는 저장까지 마친 뒤 (stageKey, 예외) 로 불린다. 화면 진행 표시에 쓴다.
     """
     # 채점 기준은 현재 채점 항목으로 매번 새로 만든다(설정 화면에서 고친 내용이 바로 나간다).
     prompts = {key: stage_judge.system_prompt(key) for key in stage_keys}
     evidences = {key: evidence.build(trace_json, key) for key in stage_keys}
     failures: dict[str, Exception] = {}
+    run_id = evaluation_record.new_run_id()
+    # 결과가 하나라도 저장되면 그 점수의 근거도 함께 있어야 하므로 채점보다 먼저 남긴다.
+    store.save_json(task_trace_file(task_id), trace_json)
 
-    def on_done(stage_key: str, _score: StageScore | None, error: Exception | None) -> None:
+    def save(stage_key: str, score: StageScore) -> None:
+        version = stage_judge.register_rubric(stage_key, prompts[stage_key], note="단계 채점")
+        stage_evidence = evidences[stage_key]
+        evaluation_record.save_stages(
+            task_id=task_id,
+            trace_id=trace_id,
+            env=env,
+            trace_name=(trace_json.get("task") or {}).get("traceName"),
+            date=(trace_json.get("source") or {}).get("date"),
+            results={stage_key: score},
+            rubric_refs={stage_key: {"name": version["name"], "version": version["version"]}},
+            evidence_summaries={
+                stage_key: {
+                    "summary": stage_evidence.summary,
+                    "sections": [section.title for section in stage_evidence.sections],
+                }
+            },
+            trace_meta=trace_meta,
+            run_id=run_id,
+        )
+
+    def on_done(stage_key: str, score: StageScore | None, error: Exception | None) -> None:
         if error is not None:
             failures[stage_key] = error
+        elif score is not None:
+            save(stage_key, score)
         if on_stage is not None:
             on_stage(stage_key, error)
 
     results = stage_judge.score_stages(
         trace_json, stage_keys, workers=workers, prompts=prompts, on_done=on_done
     )
-
-    rubric_refs = {}
-    for key in results:
-        version = stage_judge.register_rubric(key, prompts[key], note="단계 채점")
-        rubric_refs[key] = {"name": version["name"], "version": version["version"]}
-    summaries = {
-        key: {
-            "summary": evidences[key].summary,
-            "sections": [section.title for section in evidences[key].sections],
-        }
-        for key in results
-    }
-    record = evaluation_record.save_stages(
-        task_id=task_id,
-        trace_id=trace_id,
-        env=env,
-        trace_name=(trace_json.get("task") or {}).get("traceName"),
-        date=(trace_json.get("source") or {}).get("date"),
-        results=results,
-        rubric_refs=rubric_refs,
-        evidence_summaries=summaries,
-        trace_meta=trace_meta,
-    )
-    store.save_json(task_trace_file(task_id), trace_json)
-    return JudgeOutcome(record, results, failures)
+    return JudgeOutcome(evaluation_record.load(task_id) or {}, results, failures)

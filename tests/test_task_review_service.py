@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -86,7 +87,7 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(stored["composite"]["evaluatedCount"], 2)
         self.assertEqual(stored["env"], "dev")
         self.assertEqual(stored["traceName"], "generate-timeline")
-        self.assertEqual(outcome.record["composite"], stored["composite"])
+        self.assertEqual(outcome.record, stored)
         self.assertEqual(outcome.failures, {})
         self.assertTrue(task_trace_file("task-1").exists())
 
@@ -117,6 +118,60 @@ class JudgeTests(unittest.TestCase):
         self.assertIsInstance(outcome.failures["repair"], CodexTimeout)
         self.assertEqual(set(evaluation_record.load("task-1")["stages"]), {"timeline"})
         self.assertEqual(sorted(seen), [("repair", True), ("timeline", False)])
+
+    def test_finished_stage_is_saved_before_the_next_one_ends(self) -> None:
+        """프로세스가 도중에 끝나도 끝난 단계의 결과는 남아야 한다."""
+        saved_at_each_stage: list[set[str]] = []
+
+        def on_stage(_key: str, _error: Exception | None) -> None:
+            saved_at_each_stage.append(set(evaluation_record.load("task-1")["stages"]))
+
+        self._judge(_Provider(), on_stage=on_stage, workers=1)
+
+        self.assertEqual([len(saved) for saved in saved_at_each_stage], [1, 2])
+
+    def test_stage_that_ended_first_is_reported_first(self) -> None:
+        """오래 걸리는 단계를 기다리느라 끝난 단계의 저장이 밀리면 안 된다."""
+        release_slow_stage = threading.Event()
+
+        class _SlowRepair(_Provider):
+            def evaluate(self, *, system_prompt, user_prompt, result_model):
+                if result_model.__name__.startswith("timeline_"):
+                    release_slow_stage.wait(timeout=10)
+                return super().evaluate(
+                    system_prompt=system_prompt, user_prompt=user_prompt, result_model=result_model
+                )
+
+        order: list[str] = []
+
+        def on_stage(key: str, _error: Exception | None) -> None:
+            order.append(key)
+            release_slow_stage.set()
+
+        self._judge(_SlowRepair(), on_stage=on_stage, workers=2)
+
+        self.assertEqual(order, ["repair", "timeline"])
+
+    def test_interrupted_run_keeps_finished_stages_and_their_trace(self) -> None:
+        def stop_after_first_stage(_key: str, _error: Exception | None) -> None:
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._judge(_Provider(), on_stage=stop_after_first_stage, workers=1)
+
+        self.assertEqual(len(evaluation_record.load("task-1")["stages"]), 1)
+        self.assertTrue(task_trace_file("task-1").exists())
+
+    def test_result_keeps_the_requested_stage_order(self) -> None:
+        outcome = self._judge(_Provider())
+
+        self.assertEqual(list(outcome.results), ["timeline", "repair"])
+
+    def test_every_stage_failing_leaves_an_empty_record(self) -> None:
+        outcome = self._judge(_Provider({"timeline", "repair"}))
+
+        self.assertEqual(outcome.record, {})
+        self.assertEqual(set(outcome.failures), {"timeline", "repair"})
 
     def test_scored_index_finds_saved_results(self) -> None:
         self._judge(_Provider())
