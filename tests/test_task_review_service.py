@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from app.analysis import calibration, evaluation_record, evidence, stage_judge, stages
@@ -17,6 +18,7 @@ from app.config import Settings
 from app.storage import store
 from app.storage.paths import task_trace_file
 from app.tasks import review
+from app.tasks.trace_builder import SCHEMA_VERSION
 
 
 def _card(spec, result_model):
@@ -182,6 +184,61 @@ class JudgeTests(unittest.TestCase):
         self._judge(_Provider())
 
         self.assertEqual(store.load_json(task_trace_file("task-1"))["source"]["date"], "2026-09-04")
+
+
+class LoadTraceJsonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        settings = Settings(_env_file=None, data_dir=self._tmp.name)
+        patcher = mock.patch("app.storage.paths.get_settings", return_value=settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(review, "get_trace", return_value=SimpleNamespace(id="trace-1"))
+        self.get_trace = patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(review, "build_trace_json", return_value={"from": "langfuse"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _save_local(self, **changes) -> dict:
+        stored = {"schemaVersion": SCHEMA_VERSION, "task": {"traceId": "trace-1"}} | changes
+        store.save_json(task_trace_file("task-1"), stored)
+        return stored
+
+    def test_local_copy_is_used_without_calling_langfuse(self) -> None:
+        stored = self._save_local()
+
+        self.assertEqual(review.load_trace_json("trace-1", "dev", "task-1"), stored)
+        self.get_trace.assert_not_called()
+
+    def test_without_a_local_copy_langfuse_is_called_with_the_env(self) -> None:
+        self.assertEqual(review.load_trace_json("trace-1", "prod", "task-1"), {"from": "langfuse"})
+        self.get_trace.assert_called_once_with("trace-1", "prod")
+
+    def test_old_schema_is_not_used(self) -> None:
+        self._save_local(schemaVersion=1)
+
+        self.assertEqual(review.load_trace_json("trace-1", "dev", "task-1"), {"from": "langfuse"})
+
+    def test_copy_of_another_trace_is_not_used(self) -> None:
+        self._save_local(task={"traceId": "trace-2"})
+
+        self.assertEqual(review.load_trace_json("trace-1", "dev", "task-1"), {"from": "langfuse"})
+
+    def test_rows_without_a_task_id_go_to_langfuse(self) -> None:
+        self.assertEqual(review.load_trace_json("trace-1", "dev"), {"from": "langfuse"})
+
+
+class TaskIdTests(unittest.TestCase):
+    def test_row_value_comes_first(self) -> None:
+        self.assertEqual(review.task_id_of({"id": "t", "taskId": "a"}, {"task": {"taskId": "b"}}), "a")
+
+    def test_detail_value_fills_in_for_old_rows(self) -> None:
+        self.assertEqual(review.task_id_of({"id": "t", "taskId": None}, {"task": {"taskId": "b"}}), "b")
+
+    def test_trace_id_is_the_last_resort(self) -> None:
+        self.assertEqual(review.task_id_of({"id": "t"}, {}), "t")
 
 
 class ImportTests(unittest.TestCase):

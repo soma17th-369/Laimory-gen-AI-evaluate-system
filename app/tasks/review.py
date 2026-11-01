@@ -15,8 +15,10 @@ from typing import Any, Callable
 
 from app.analysis import evaluation_record, evidence, stage_judge, stages
 from app.analysis.stage_schema import StageScore
+from app.langfuse_client import get_trace
 from app.storage import store
 from app.storage.paths import task_trace_file
+from app.tasks.trace_builder import SCHEMA_VERSION, build_trace_json
 
 SCORABLE_NAMES = frozenset({stages.TIMELINE_TRACE, stages.USER_MEMORY_TRACE})
 """채점 대상 트레이스 이름. 나머지 이름은 대상 서버 테스트가 남긴 조각이다."""
@@ -32,13 +34,26 @@ def is_scorable(row: dict[str, Any]) -> bool:
     return bool(_UUID.match(task_id))
 
 
-def domain_task_id(trace_detail: Any, trace_id: str) -> str:
-    raw = getattr(trace_detail, "input", None)
-    if isinstance(raw, dict):
-        tid = raw.get("taskId") or (raw.get("request") or {}).get("taskId")
-        if tid:
-            return str(tid)
-    return trace_id
+def task_id_of(row: dict[str, Any], trace_json: dict) -> str:
+    """결과를 저장할 Task id. 수집 행에 없으면 상세의 값, 그것도 없으면 트레이스 id 를 쓴다."""
+    return str(row.get("taskId") or (trace_json.get("task") or {}).get("taskId") or row["id"])
+
+
+def load_trace_json(trace_id: str, env: str, task_id: str | None = None) -> dict:
+    """트레이스 상세를 `trace.json` 형태로 준다. 로컬 저장본이 있으면 LangFuse 를 부르지 않는다.
+
+    상세 조회는 호출 한도가 작고 로그는 보존 기간이 지나면 사라진다. 채점한 Task 는 저장본이 남아 있어
+    같은 근거로 다시 볼 수 있다. 예전 구조이거나 다른 트레이스의 저장본이면 쓰지 않는다.
+    """
+    if task_id:
+        stored = store.load_json(task_trace_file(task_id))
+        if (
+            isinstance(stored, dict)
+            and stored.get("schemaVersion") == SCHEMA_VERSION
+            and (stored.get("task") or {}).get("traceId") == trace_id
+        ):
+            return stored
+    return build_trace_json(get_trace(trace_id, env))
 
 
 def scored_index() -> dict[str, dict[str, Any]]:

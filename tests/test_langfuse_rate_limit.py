@@ -46,5 +46,37 @@ class RateLimitWaitTests(unittest.TestCase):
         sleep.assert_called_with(langfuse_client.RATE_LIMIT_DEFAULT_WAIT_SECONDS + 1)
 
 
+class GetTraceTests(unittest.TestCase):
+    def _client(self, *answers) -> mock.Mock:
+        client = mock.Mock()
+        client.api.trace.get.side_effect = list(answers)
+        return client
+
+    def test_waits_for_the_rate_limit_like_the_list_call(self) -> None:
+        client = self._client(ApiError(status_code=429, headers={"Retry-After": "2"}), "상세")
+
+        with (
+            mock.patch.object(langfuse_client, "get_client", return_value=client),
+            mock.patch.object(langfuse_client.time, "sleep") as sleep,
+        ):
+            self.assertEqual(langfuse_client.get_trace("t1", "dev"), "상세")
+
+        sleep.assert_called_once_with(3.0)
+
+    def test_missing_trace_has_its_own_error(self) -> None:
+        client = self._client(ApiError(status_code=404))
+
+        with mock.patch.object(langfuse_client, "get_client", return_value=client):
+            with self.assertRaises(langfuse_client.TraceNotFound):
+                langfuse_client.get_trace("t1", "dev")
+
+    def test_other_errors_stay_as_they_are(self) -> None:
+        client = self._client(ApiError(status_code=500))
+
+        with mock.patch.object(langfuse_client, "get_client", return_value=client):
+            with self.assertRaises(ApiError):
+                langfuse_client.get_trace("t1", "dev")
+
+
 if __name__ == "__main__":
     unittest.main()

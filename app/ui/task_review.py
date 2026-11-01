@@ -23,11 +23,9 @@ import streamlit as st
 from app import environments
 from app.analysis import evaluation_record, evidence as evidence_mod, stages
 from app.analysis.providers import JudgeProviderError, llm_provider_label, llm_setup_error
-from app.langfuse_client import get_trace
 from app.storage import store
 from app.storage.paths import collection_file
 from app.tasks import review
-from app.tasks.trace_builder import build_trace_json
 from app.ui import env_filter, stage_view
 
 _COLUMN_ORDER = (
@@ -269,25 +267,20 @@ def render() -> None:
     selected = str(summary["id"])
     env = environments.of(summary)
 
-    detail_cache = st.session_state.setdefault("tr_detail", {})
-    if selected not in detail_cache:
+    tj_cache = st.session_state.setdefault("tr_tracejson", {})
+    if selected not in tj_cache:
         try:
             with st.spinner(f"상세 조회 중… ({environments.label(env)})"):
-                detail_cache[selected] = get_trace(selected, env)
+                tj_cache[selected] = review.load_trace_json(selected, env, summary.get("taskId"))
         except Exception as exc:  # noqa: BLE001
             st.error(f"상세 조회 실패: {type(exc).__name__}: {exc}")
             return
-    detail = detail_cache[selected]
-    task_id = review.domain_task_id(detail, selected)
-
-    tj_cache = st.session_state.setdefault("tr_tracejson", {})
-    if selected not in tj_cache:
-        tj_cache[selected] = build_trace_json(detail)
     trace_json = tj_cache[selected]
+    task_id = review.task_id_of(summary, trace_json)
 
     st.divider()
     st.markdown(
-        f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`  ·  "
+        f"### {(trace_json.get('task') or {}).get('traceName') or '(이름없음)'}  ·  task `{task_id}`  ·  "
         f"{environments.label(env)}"
     )
 
