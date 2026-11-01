@@ -33,6 +33,10 @@ class LangfuseNotConfigured(RuntimeError):
     """LangFuse 키가 없어 조회할 수 없을 때."""
 
 
+class TraceNotFound(RuntimeError):
+    """LangFuse 에 없는 트레이스. id 가 틀렸거나 보존 기간이 지났다."""
+
+
 _clients: dict[str, Langfuse] = {}
 """환경 → 클라이언트. 키를 캐시 key 로 쓰지 않으려고 lru_cache 대신 이 표를 쓴다."""
 
@@ -129,8 +133,19 @@ def list_traces(
 
 
 def get_trace(trace_id: str, env: str) -> Any:
-    """트레이스 상세(관측치·스코어 포함, ``TraceWithFullDetails``)를 조회한다."""
-    return get_client(env).api.trace.get(trace_id)
+    """트레이스 상세(관측치·스코어 포함, ``TraceWithFullDetails``)를 조회한다.
+
+    호출 한도에 걸리면 기다렸다가 다시 부르고, 없는 트레이스는 [TraceNotFound][app.langfuse_client.TraceNotFound] 로 올린다.
+    """
+    client = get_client(env)
+    try:
+        return _wait_on_rate_limit(lambda: client.api.trace.get(trace_id))
+    except ApiError as exc:
+        if exc.status_code == 404:
+            raise TraceNotFound(
+                f"LangFuse 에 없는 트레이스입니다: {trace_id} (id 가 틀렸거나 보존 기간이 지났습니다)"
+            ) from exc
+        raise
 
 
 def list_generations(

@@ -1,0 +1,132 @@
+"""Task 채점 흐름 — 화면과 MCP 서버가 같은 코드를 쓰게 하는 공용 계층.
+
+채점 대상을 고르는 규칙과 "채점하고 저장하기"를 여기 모은다. 화면(→ [app.ui.task_review][])은
+진행 표시만 덧붙이고, `streamlit` 없이도 이 모듈만으로 같은 결과가 저장된다.
+
+수집 목록에는 대상 서버의 **테스트 실행**(taskId 가 `task-test` 고정, 비용 0, 관측치 1~7개)이
+실제 실행보다 훨씬 많다. 채점 대상은 이름이 맞고 taskId 가 UUID 형식인 실제 실행뿐이다.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from app.analysis import evaluation_record, evidence, stage_judge, stages
+from app.analysis.stage_schema import StageScore
+from app.langfuse_client import get_trace
+from app.storage import store
+from app.storage.paths import task_trace_file
+from app.tasks.trace_builder import SCHEMA_VERSION, build_trace_json
+
+SCORABLE_NAMES = frozenset({stages.TIMELINE_TRACE, stages.USER_MEMORY_TRACE})
+"""채점 대상 트레이스 이름. 나머지 이름은 대상 서버 테스트가 남긴 조각이다."""
+
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def is_scorable(row: dict[str, Any]) -> bool:
+    """실제 실행인지. 이름이 맞고 taskId 가 UUID 형식이어야 한다(`task-test` 등 제외)."""
+    if row.get("name") not in SCORABLE_NAMES:
+        return False
+    task_id = str(row.get("taskId") or "")
+    return bool(_UUID.match(task_id))
+
+
+def task_id_of(row: dict[str, Any], trace_json: dict) -> str:
+    """결과를 저장할 Task id. 수집 행에 없으면 상세의 값, 그것도 없으면 트레이스 id 를 쓴다."""
+    return str(row.get("taskId") or (trace_json.get("task") or {}).get("taskId") or row["id"])
+
+
+def load_trace_json(trace_id: str, env: str, task_id: str | None = None) -> dict:
+    """트레이스 상세를 `trace.json` 형태로 준다. 로컬 저장본이 있으면 LangFuse 를 부르지 않는다.
+
+    상세 조회는 호출 한도가 작고 로그는 보존 기간이 지나면 사라진다. 채점한 Task 는 저장본이 남아 있어
+    같은 근거로 다시 볼 수 있다. 예전 구조이거나 다른 트레이스의 저장본이면 쓰지 않는다.
+    """
+    if task_id:
+        stored = store.load_json(task_trace_file(task_id))
+        if (
+            isinstance(stored, dict)
+            and stored.get("schemaVersion") == SCHEMA_VERSION
+            and (stored.get("task") or {}).get("traceId") == trace_id
+        ):
+            return stored
+    return build_trace_json(get_trace(trace_id, env))
+
+
+def scored_index() -> dict[str, dict[str, Any]]:
+    """taskId → 저장된 채점 결과. 목록에 채점 여부를 붙이는 데 쓴다."""
+    return {
+        str(record.get("taskId") or path.stem): record
+        for path, record in evaluation_record.load_all()
+    }
+
+
+@dataclass(frozen=True)
+class JudgeOutcome:
+    """채점 한 번의 결과. 실패한 단계는 `failures` 로만 남고 저장되지 않는다."""
+
+    record: dict[str, Any]
+    results: dict[str, StageScore]
+    failures: dict[str, Exception]
+
+
+def judge(
+    *,
+    trace_json: dict,
+    stage_keys: list[str],
+    task_id: str,
+    trace_id: str,
+    env: str,
+    workers: int = 3,
+    trace_meta: dict[str, Any] | None = None,
+    on_stage: Callable[[str, Exception | None], None] | None = None,
+) -> JudgeOutcome:
+    """선택한 단계를 채점하고 **단계가 끝날 때마다** 저장한다. 한 단계가 실패해도 나머지는 남긴다.
+
+    프로세스가 도중에 끝나도 끝난 단계의 결과는 남는다. 함께 채점한 단계는 같은 `runId` 로 묶인다.
+    `on_stage` 는 저장까지 마친 뒤 (stageKey, 예외) 로 불린다. 화면 진행 표시에 쓴다.
+    """
+    # 채점 기준은 현재 채점 항목으로 매번 새로 만든다(설정 화면에서 고친 내용이 바로 나간다).
+    prompts = {key: stage_judge.system_prompt(key) for key in stage_keys}
+    evidences = {key: evidence.build(trace_json, key) for key in stage_keys}
+    failures: dict[str, Exception] = {}
+    run_id = evaluation_record.new_run_id()
+    # 결과가 하나라도 저장되면 그 점수의 근거도 함께 있어야 하므로 채점보다 먼저 남긴다.
+    store.save_json(task_trace_file(task_id), trace_json)
+
+    def save(stage_key: str, score: StageScore) -> None:
+        version = stage_judge.register_rubric(stage_key, prompts[stage_key], note="단계 채점")
+        stage_evidence = evidences[stage_key]
+        evaluation_record.save_stages(
+            task_id=task_id,
+            trace_id=trace_id,
+            env=env,
+            trace_name=(trace_json.get("task") or {}).get("traceName"),
+            date=(trace_json.get("source") or {}).get("date"),
+            results={stage_key: score},
+            rubric_refs={stage_key: {"name": version["name"], "version": version["version"]}},
+            evidence_summaries={
+                stage_key: {
+                    "summary": stage_evidence.summary,
+                    "sections": [section.title for section in stage_evidence.sections],
+                }
+            },
+            trace_meta=trace_meta,
+            run_id=run_id,
+        )
+
+    def on_done(stage_key: str, score: StageScore | None, error: Exception | None) -> None:
+        if error is not None:
+            failures[stage_key] = error
+        elif score is not None:
+            save(stage_key, score)
+        if on_stage is not None:
+            on_stage(stage_key, error)
+
+    results = stage_judge.score_stages(
+        trace_json, stage_keys, workers=workers, prompts=prompts, on_done=on_done
+    )
+    return JudgeOutcome(evaluation_record.load(task_id) or {}, results, failures)

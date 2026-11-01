@@ -14,6 +14,7 @@ from unittest import mock
 import pydantic
 
 from app.analysis import evaluation_record, stage_schema, stages
+from app.storage import store
 
 
 def _card(stage_key: str, *, scores: dict[str, int] | None = None, skipped: set[str] | None = None):
@@ -198,6 +199,16 @@ class EvaluationRecordTests(unittest.TestCase):
         )
         stored = evaluation_record.load("task-1")
         self.assertFalse(evaluation_record.is_legacy(stored))
+
+    def test_broken_record_is_not_overwritten(self) -> None:
+        """다른 단계의 점수가 든 파일을 빈 레코드로 읽어 덮어쓰면 안 된다."""
+        path = evaluation_record.evaluation_file("task-1")
+        path.write_text("{ 끊긴", encoding="utf-8")
+
+        with self.assertRaises(store.CorruptJson):
+            self._save("question")
+
+        self.assertEqual(path.read_text(encoding="utf-8"), "{ 끊긴")
 
     def test_every_run_is_appended_to_the_history(self) -> None:
         """같은 단계를 다시 채점해도 이전 기록은 지워지지 않는다."""

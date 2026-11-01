@@ -10,25 +10,22 @@
 있다(→ [app.environments][]). 상세 조회는 **그 행이 온 프로젝트로** 보내야 하므로 선택한 행의
 `env` 를 그대로 따라간다.
 
-수집 목록에는 대상 서버의 **테스트 실행**(taskId 가 `task-test` 고정, 비용 0, 관측치 1~7개)이
-실제 실행보다 훨씬 많다. 기본은 채점 대상만 보여주고, 필요하면 필터를 끈다.
+기본은 채점 대상만 보여주고, 필요하면 필터를 끈다(→ [app.tasks.review][]).
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from app import environments
-from app.analysis import evaluation_record, evidence as evidence_mod, stage_judge, stages
+from app.analysis import evaluation_record, evidence as evidence_mod, stages
 from app.analysis.providers import JudgeProviderError, llm_provider_label, llm_setup_error
-from app.langfuse_client import get_trace
 from app.storage import store
-from app.storage.paths import collection_file, task_trace_file
-from app.tasks.trace_builder import build_trace_json
+from app.storage.paths import collection_file
+from app.tasks import review
 from app.ui import env_filter, stage_view
 
 _COLUMN_ORDER = (
@@ -45,37 +42,6 @@ _COLUMN_ORDER = (
 
 _TABLE_HEIGHT = 320
 """목록 높이(px). 선택한 행의 상세가 화면 안에서 바로 이어지도록 목록을 짧게 잡는다."""
-
-_SCORABLE_NAMES = frozenset({stages.TIMELINE_TRACE, stages.USER_MEMORY_TRACE})
-"""채점 대상 트레이스 이름. 나머지 이름은 대상 서버 테스트가 남긴 조각이다."""
-
-_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-
-
-def _is_scorable(row: dict[str, Any]) -> bool:
-    """실제 실행인지. 이름이 맞고 taskId 가 UUID 형식이어야 한다(`task-test` 등 제외)."""
-    if row.get("name") not in _SCORABLE_NAMES:
-        return False
-    task_id = str(row.get("taskId") or "")
-    return bool(_UUID.match(task_id))
-
-
-def _domain_task_id(trace_detail: Any, trace_id: str) -> str:
-    raw = getattr(trace_detail, "input", None)
-    if isinstance(raw, dict):
-        tid = raw.get("taskId") or (raw.get("request") or {}).get("taskId")
-        if tid:
-            return str(tid)
-    return trace_id
-
-
-def scored_index() -> dict[str, dict[str, Any]]:
-    """taskId → 저장된 채점 결과. 목록에 채점 여부를 붙이는 데 쓴다."""
-    return {
-        str(record.get("taskId") or path.stem): record
-        for path, record in evaluation_record.load_all()
-    }
-
 
 def _scored_columns(row: dict[str, Any], scored: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """행 하나의 채점 여부. 단계까지는 아래 단계 표에서 보므로 목록에서는 O/X 로만 구분한다.
@@ -120,7 +86,7 @@ def _selectable_rows(
     """표에 그대로 넘길 행 목록. 선택은 이 리스트의 위치로 돌아온다."""
     usable = [dict(row) for row in rows if isinstance(row, dict) and row.get("id")]
     if only_scorable:
-        usable = [row for row in usable if _is_scorable(row)]
+        usable = [row for row in usable if review.is_scorable(row)]
     if scored is not None:
         for row in usable:
             row.update(_scored_columns(row, scored))
@@ -142,27 +108,28 @@ def _run_judge(
     task_id: str,
     trace_id: str,
     env: str,
-    evidences: dict[str, Any],
     workers: int,
     trace_meta: dict[str, Any] | None = None,
 ) -> None:
-    """선택한 단계를 채점하고 결과를 저장한다. 한 단계가 실패해도 나머지는 남긴다."""
-    # 채점 기준은 현재 채점 항목으로 매번 새로 만든다(설정 화면에서 고친 내용이 바로 나간다).
-    prompts = {key: stage_judge.system_prompt(key) for key in stage_keys}
-    failures: list[str] = []
+    """선택한 단계를 채점하고 진행을 보여준다. 저장은 [review.judge][app.tasks.review.judge] 가 한다."""
     progress = st.progress(0.0, text="채점 준비 중…")
     done = 0
 
-    def on_done(stage_key: str, _score: Any, error: Exception | None) -> None:
+    def on_stage(stage_key: str, _error: Exception | None) -> None:
         nonlocal done
         done += 1
         progress.progress(done / len(stage_keys), text=f"{stages.get(stage_key).label} 완료 ({done}/{len(stage_keys)})")
-        if error is not None:
-            failures.append(f"{stages.get(stage_key).label}: {type(error).__name__}: {error}")
 
     try:
-        results = stage_judge.score_stages(
-            trace_json, stage_keys, workers=workers, prompts=prompts, on_done=on_done
+        outcome = review.judge(
+            trace_json=trace_json,
+            stage_keys=stage_keys,
+            task_id=task_id,
+            trace_id=trace_id,
+            env=env,
+            workers=workers,
+            trace_meta=trace_meta,
+            on_stage=on_stage,
         )
     except JudgeProviderError as exc:
         progress.empty()
@@ -170,32 +137,13 @@ def _run_judge(
         return
     progress.empty()
 
-    rubric_refs = {}
-    for key in results:
-        version = stage_judge.register_rubric(key, prompts[key], note="단계 채점")
-        rubric_refs[key] = {"name": version["name"], "version": version["version"]}
-    summaries = {
-        key: {
-            "summary": evidences[key].summary,
-            "sections": [section.title for section in evidences[key].sections],
-        }
-        for key in results
-    }
-    record = evaluation_record.save_stages(
-        task_id=task_id,
-        trace_id=trace_id,
-        env=env,
-        trace_name=(trace_json.get("task") or {}).get("traceName"),
-        date=(trace_json.get("source") or {}).get("date"),
-        results=results,
-        rubric_refs=rubric_refs,
-        evidence_summaries=summaries,
-        trace_meta=trace_meta,
-    )
-    store.save_json(task_trace_file(task_id), trace_json)
-    composite = (record.get("composite") or {}).get("score")
+    composite = (outcome.record.get("composite") or {}).get("score")
     st.toast(f"채점 저장 — 종합 {composite if composite is not None else '-'}/100")
-    if failures:
+    if outcome.failures:
+        failures = [
+            f"{stages.get(key).label}: {type(error).__name__}: {error}"
+            for key, error in outcome.failures.items()
+        ]
         st.warning("일부 단계가 실패했습니다:\n\n" + "\n".join(f"- {item}" for item in failures))
 
 
@@ -282,7 +230,7 @@ def render() -> None:
             ),
         )
     traces = environments.keep(traces, envs)
-    scored = scored_index()
+    scored = review.scored_index()
     summaries = _selectable_rows(traces, only_scorable=only_scorable, scored=scored)
     if not summaries:
         st.warning("조건에 맞는 트레이스가 없습니다. 필터를 끄거나 로그를 다시 수집하세요.")
@@ -319,25 +267,20 @@ def render() -> None:
     selected = str(summary["id"])
     env = environments.of(summary)
 
-    detail_cache = st.session_state.setdefault("tr_detail", {})
-    if selected not in detail_cache:
+    tj_cache = st.session_state.setdefault("tr_tracejson", {})
+    if selected not in tj_cache:
         try:
             with st.spinner(f"상세 조회 중… ({environments.label(env)})"):
-                detail_cache[selected] = get_trace(selected, env)
+                tj_cache[selected] = review.load_trace_json(selected, env, summary.get("taskId"))
         except Exception as exc:  # noqa: BLE001
             st.error(f"상세 조회 실패: {type(exc).__name__}: {exc}")
             return
-    detail = detail_cache[selected]
-    task_id = _domain_task_id(detail, selected)
-
-    tj_cache = st.session_state.setdefault("tr_tracejson", {})
-    if selected not in tj_cache:
-        tj_cache[selected] = build_trace_json(detail)
     trace_json = tj_cache[selected]
+    task_id = review.task_id_of(summary, trace_json)
 
     st.divider()
     st.markdown(
-        f"### {getattr(detail, 'name', None) or '(이름없음)'}  ·  task `{task_id}`  ·  "
+        f"### {(trace_json.get('task') or {}).get('traceName') or '(이름없음)'}  ·  task `{task_id}`  ·  "
         f"{environments.label(env)}"
     )
 
@@ -403,7 +346,6 @@ def render() -> None:
             task_id=task_id,
             trace_id=selected,
             env=env,
-            evidences=evidences,
             workers=int(st.session_state.get(f"workers_{selected}", 3)),
             trace_meta={
                 "cost": summary.get("total_cost"),

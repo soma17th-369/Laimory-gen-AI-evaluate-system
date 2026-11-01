@@ -47,7 +47,7 @@ Sleep/Activity Agent 는 문서에서 deprecated 라 대상이 아니다.
 
 수집 목록의 대부분은 대상 서버의 **테스트 실행**이다(taskId 가 `task-test` 고정, 비용 0,
 관측치 1~7개, session_id·tags 없음). 채점 대상은 이름이 `generate-timeline` 또는
-`update-user-memory` 이고 taskId 가 UUID 형식인 트레이스다.
+`update-user-memory` 이고 taskId 가 UUID 형식인 트레이스다(→ `app/tasks/review.py` 의 `is_scorable`).
 
 ## 코드 측정 항목은 쓰지 않는다
 
@@ -58,6 +58,15 @@ Sleep/Activity Agent 는 문서에서 deprecated 라 대상이 아니다.
 
 ## 저장
 
+- 채점·저장 흐름의 정본은 `app/tasks/review.py` 의 `judge()` 다. 화면은 진행 표시만 덧붙이므로
+  `streamlit` 없이도 같은 결과가 저장된다.
+- **단계가 끝날 때마다 저장한다.** 프로세스가 도중에 끝나도 끝난 단계는 남는다. 근거인 `trace.json` 은
+  채점 전에 먼저 저장하고, 함께 채점한 단계는 같은 `runId` 로 묶는다.
+- **레코드 저장은 잠근다.** 화면과 다른 프로세스가 동시에 저장할 수 있으므로 `save_stages` 와 프롬프트
+  레지스트리는 읽고-합쳐-쓰는 동안 `store.locked` 를 잡는다. 깨진 레코드는 빈 값으로 읽어 덮어쓰지 않고
+  `CorruptJson` 으로 멈춘다.
+- **상세는 저장본을 먼저 쓴다.** `load_trace_json()` 은 `schemaVersion` 과 `traceId` 가 맞는 `trace.json` 이
+  있으면 LangFuse 를 부르지 않는다. 그래서 채점한 Task 는 보존 기간이 지나도 같은 근거로 다시 볼 수 있다.
 - 채점 결과(최신): `data/evaluations/<taskId>.json` (`schemaVersion: 2`). 단계별로 갱신하고 종합은
   저장할 때마다 다시 계산한다. 근거 원문은 담지 않고 `trace.json` 으로 다시 만든다.
 - 채점 **실행 이력**: `data/evaluations/history/<taskId>.jsonl`. 한 줄이 단계 1회 채점이고 덮어쓰지

@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from app.analysis import calibration, evidence, stage_schema, stages
@@ -113,7 +113,9 @@ def score_stages(
 ) -> dict[str, StageScore]:
     """여러 단계를 병렬로 채점한다. 한 단계가 실패해도 나머지는 계속한다.
 
-    `on_done` 은 단계가 끝날 때마다 (stageKey, 결과, 예외) 로 불린다. 화면 진행 표시에 쓴다.
+    `on_done` 은 단계가 **끝난 순서대로** (stageKey, 결과, 예외) 로 불린다. 호출부는 여기서 바로
+    저장한다. 오래 걸리는 단계를 기다리느라 끝난 단계의 저장이 밀리면, 그 사이 프로세스가 죽을 때
+    끝난 결과까지 잃는다.
     """
     results: dict[str, StageScore] = {}
     evidences = {key: evidence.build(trace_json, key) for key in stage_keys}
@@ -138,9 +140,9 @@ def score_stages(
         )
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        # 제출은 한꺼번에, 회수는 단계 순서대로 한다(진행 표시가 목록 순서와 같아진다).
-        futures = {key: pool.submit(run, key) for key in pending}
-        for key, future in futures.items():
+        futures = {pool.submit(run, key): key for key in pending}
+        for future in as_completed(futures):
+            key = futures[future]
             try:
                 results[key] = future.result()
                 error: Exception | None = None
@@ -148,7 +150,7 @@ def score_stages(
                 error = exc
             if on_done is not None:
                 on_done(key, results.get(key), error)
-    return results
+    return {key: results[key] for key in stage_keys if key in results}
 
 
 def composite(results: dict[str, StageScore] | list[StageScore]) -> dict[str, Any]:
