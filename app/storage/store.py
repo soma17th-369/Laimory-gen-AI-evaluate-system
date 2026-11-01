@@ -2,6 +2,10 @@
 
 저장은 **원자적**이다. 임시 파일에 다 쓴 뒤 교체하므로, 쓰는 도중 프로세스가 죽거나 다른 프로세스가
 읽어도 언제나 완전한 파일만 보인다.
+
+읽고-합쳐-쓰는 저장은 원자적 쓰기만으로 부족하다. 두 프로세스가 같은 내용을 읽고 각자 합쳐 쓰면
+나중에 쓴 쪽이 먼저 쓴 쪽을 지운다. 화면과 MCP 서버는 별도 프로세스이므로 그런 곳은
+[locked][app.storage.store.locked] 로 감싼다.
 """
 
 from __future__ import annotations
@@ -9,9 +13,15 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 from uuid import uuid4
+
+from filelock import FileLock
+
+LOCK_TIMEOUT_SECONDS = 60.0
+"""잠금을 기다리는 최대 시간. 저장 순간에만 잡는 잠금이라 이보다 오래 막히면 이상이 있는 것이다."""
 
 _SHARING_RETRIES = 40
 _SHARING_WAIT_SECONDS = 0.05
@@ -35,6 +45,19 @@ def _retry_while_shared(call: Callable[[], _T]) -> _T:
         except PermissionError:
             time.sleep(_SHARING_WAIT_SECONDS)
     return call()
+
+
+@contextmanager
+def locked(path: Path) -> Iterator[None]:
+    """`path` 를 읽고-합쳐-쓰는 동안 다른 프로세스·스레드를 기다리게 한다.
+
+    잠금은 `<path>.lock` 파일에 OS 잠금으로 건다. 프로세스가 죽으면 OS 가 풀어 주므로 남아서 막지
+    않는다. 같은 `path` 를 안쪽에서 다시 잠그면 자기 자신을 기다리므로 겹쳐 쓰지 않는다.
+    """
+    lock_file = path.with_name(f"{path.name}.lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(lock_file, timeout=LOCK_TIMEOUT_SECONDS):
+        yield
 
 
 def save_json(path: Path, data: Any) -> Path:

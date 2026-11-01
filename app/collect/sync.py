@@ -171,37 +171,44 @@ def sync(
     받는다. 어느 쪽이든 기존에 저장된 행은 지우지 않으며, **다른 환경의 행도 건드리지 않는다.**
     """
     environment = environments.validate(env)
-    states = load_states()
-    state = states.get(environment, {})
+    state = load_state(environment)
     backfill = full or needs_backfill(state)
     cursor = None if backfill else parse_timestamp(state.get("last_timestamp"))
 
     merged = {row["id"]: row for row in _stored_rows() if row.get("id")}
+    received: dict[str, dict[str, Any]] = {}
     added = updated = fetched = pages = 0
     completed = False
     page = 1
     watermark: datetime | None = None
 
     def persist() -> tuple[int, int]:
-        """지금까지 받은 행과 커서를 저장한다. 반환은 (그 환경 행 수, 전체 행 수)."""
-        rows = sorted(
-            merged.values(),
-            key=lambda row: parse_timestamp(row.get("timestamp")) or _OLDEST,
-            reverse=True,
-        )
-        if added or updated or not collection_file().exists():
-            store.save_json(collection_file(), rows)
+        """지금까지 받은 행과 커서를 저장한다. 반환은 (그 환경 행 수, 전체 행 수).
 
-        environment_total = len(rows_of(rows, environment))
-        # 이번에 훑은 구간의 끝까지만 커서를 옮긴다(아무것도 못 받았으면 이전 커서 유지).
-        newest = watermark if watermark is not None else cursor
-        states[environment] = {
-            "backfilled": bool(state.get("backfilled")) or backfill,
-            "last_timestamp": newest.isoformat() if newest is not None else None,
-            "last_synced_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-            "total": environment_total,
-        }
-        store.save_json(collection_state_file(), states)
+        수집 전체를 잠그면 호출 한도를 기다리는 동안 다른 프로세스까지 멈춘다. 그래서 저장 순간에만
+        잠그고, 그 사이 다른 프로세스가 저장한 행과 커서를 밀어내지 않게 디스크를 다시 읽어 합친다.
+        """
+        with store.locked(collection_file()):
+            stored = {row["id"]: row for row in _stored_rows() if row.get("id")}
+            rows = sorted(
+                (stored | received).values(),
+                key=lambda row: parse_timestamp(row.get("timestamp")) or _OLDEST,
+                reverse=True,
+            )
+            if received or not collection_file().exists():
+                store.save_json(collection_file(), rows)
+
+            environment_total = len(rows_of(rows, environment))
+            # 이번에 훑은 구간의 끝까지만 커서를 옮긴다(아무것도 못 받았으면 이전 커서 유지).
+            newest = watermark if watermark is not None else cursor
+            latest_states = load_states()
+            latest_states[environment] = {
+                "backfilled": bool(latest_states.get(environment, {}).get("backfilled")) or backfill,
+                "last_timestamp": newest.isoformat() if newest is not None else None,
+                "last_synced_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+                "total": environment_total,
+            }
+            store.save_json(collection_state_file(), latest_states)
         return environment_total, len(rows)
 
     try:
@@ -232,6 +239,7 @@ def sync(
                 else:
                     continue
                 merged[trace_id] = row
+                received[trace_id] = row
             if on_progress is not None:
                 on_progress(pages, fetched)
 

@@ -106,50 +106,51 @@ def save_stages(
     trace_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """단계 채점 결과를 레코드에 합쳐 저장한다. 준 단계만 갱신한다."""
-    # 깨진 레코드를 없는 것으로 읽으면 다른 단계의 점수를 덮어쓴다. 여기서는 멈춘다.
-    stored = store.read_json(evaluation_file(task_id))
-    current = stored if isinstance(stored, dict) else None
-    record: dict[str, Any]
-    if current is None or is_legacy(current):
-        # 구버전 레코드는 덮어쓰지 않고 새 구조로 시작한다(구버전 파일은 legacy 키에 남긴다).
-        record = {"schemaVersion": SCHEMA_VERSION, "stages": {}}
-        if current is not None:
-            record["legacy"] = current
-    else:
-        record = dict(current)
-        record.setdefault("stages", {})
+    with store.locked(evaluation_file(task_id)):
+        # 깨진 레코드를 없는 것으로 읽으면 다른 단계의 점수를 덮어쓴다. 여기서는 멈춘다.
+        stored = store.read_json(evaluation_file(task_id))
+        current = stored if isinstance(stored, dict) else None
+        record: dict[str, Any]
+        if current is None or is_legacy(current):
+            # 구버전 레코드는 덮어쓰지 않고 새 구조로 시작한다(구버전 파일은 legacy 키에 남긴다).
+            record = {"schemaVersion": SCHEMA_VERSION, "stages": {}}
+            if current is not None:
+                record["legacy"] = current
+        else:
+            record = dict(current)
+            record.setdefault("stages", {})
 
-    record.update(
-        {
-            "taskId": task_id,
-            "traceId": trace_id,
-            "env": env,
-            "traceName": trace_name,
-            "name": trace_name,  # 기존 화면이 쓰던 키를 유지한다
-            "date": date,
-            "updatedAt": now_iso(),
-        }
-    )
-    for key, score in results.items():
-        record["stages"][key] = {
-            "rubricRef": rubric_refs.get(key),
-            "judgedAt": now_iso(),
-            "evidence": evidence_summaries.get(key) or {},
-            "scorecard": score.to_dict(),
-        }
-    record["composite"] = _recompute_composite(record)
-    store.save_json(evaluation_file(task_id), record)
-    if results:
-        append_history(
-            task_id=task_id,
-            trace_id=trace_id,
-            env=env,
-            trace_name=trace_name,
-            date=date,
-            results=results,
-            rubric_refs=rubric_refs,
-            trace_meta=trace_meta,
+        record.update(
+            {
+                "taskId": task_id,
+                "traceId": trace_id,
+                "env": env,
+                "traceName": trace_name,
+                "name": trace_name,  # 기존 화면이 쓰던 키를 유지한다
+                "date": date,
+                "updatedAt": now_iso(),
+            }
         )
+        for key, score in results.items():
+            record["stages"][key] = {
+                "rubricRef": rubric_refs.get(key),
+                "judgedAt": now_iso(),
+                "evidence": evidence_summaries.get(key) or {},
+                "scorecard": score.to_dict(),
+            }
+        record["composite"] = _recompute_composite(record)
+        store.save_json(evaluation_file(task_id), record)
+        if results:
+            append_history(
+                task_id=task_id,
+                trace_id=trace_id,
+                env=env,
+                trace_name=trace_name,
+                date=date,
+                results=results,
+                rubric_refs=rubric_refs,
+                trace_meta=trace_meta,
+            )
     return record
 
 
