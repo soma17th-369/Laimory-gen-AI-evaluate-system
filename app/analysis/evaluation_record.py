@@ -53,6 +53,11 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def new_run_id() -> str:
+    """채점 실행 하나의 id. 함께 채점한 단계는 이력에서 이 값으로 묶인다."""
+    return uuid4().hex[:12]
+
+
 def is_legacy(record: dict[str, Any]) -> bool:
     """구버전(단일 scorecard) 레코드인지. 재채점·비교 대상에서 뺀다."""
     return int(record.get("schemaVersion") or 1) < SCHEMA_VERSION
@@ -104,50 +109,59 @@ def save_stages(
     rubric_refs: dict[str, dict[str, Any]],
     evidence_summaries: dict[str, dict[str, Any]],
     trace_meta: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
-    """단계 채점 결과를 레코드에 합쳐 저장한다. 준 단계만 갱신한다."""
-    current = load(task_id)
-    record: dict[str, Any]
-    if current is None or is_legacy(current):
-        # 구버전 레코드는 덮어쓰지 않고 새 구조로 시작한다(구버전 파일은 legacy 키에 남긴다).
-        record = {"schemaVersion": SCHEMA_VERSION, "stages": {}}
-        if current is not None:
-            record["legacy"] = current
-    else:
-        record = dict(current)
-        record.setdefault("stages", {})
+    """단계 채점 결과를 레코드에 합쳐 저장한다. 준 단계만 갱신한다.
 
-    record.update(
-        {
-            "taskId": task_id,
-            "traceId": trace_id,
-            "env": env,
-            "traceName": trace_name,
-            "name": trace_name,  # 기존 화면이 쓰던 키를 유지한다
-            "date": date,
-            "updatedAt": now_iso(),
-        }
-    )
-    for key, score in results.items():
-        record["stages"][key] = {
-            "rubricRef": rubric_refs.get(key),
-            "judgedAt": now_iso(),
-            "evidence": evidence_summaries.get(key) or {},
-            "scorecard": score.to_dict(),
-        }
-    record["composite"] = _recompute_composite(record)
-    store.save_json(evaluation_file(task_id), record)
-    if results:
-        append_history(
-            task_id=task_id,
-            trace_id=trace_id,
-            env=env,
-            trace_name=trace_name,
-            date=date,
-            results=results,
-            rubric_refs=rubric_refs,
-            trace_meta=trace_meta,
+    단계를 하나씩 나눠 저장할 때는 같은 `run_id`([new_run_id][app.analysis.evaluation_record.new_run_id])를
+    넘겨 한 번의 채점으로 묶는다.
+    """
+    with store.locked(evaluation_file(task_id)):
+        # 깨진 레코드를 없는 것으로 읽으면 다른 단계의 점수를 덮어쓴다. 여기서는 멈춘다.
+        stored = store.read_json(evaluation_file(task_id))
+        current = stored if isinstance(stored, dict) else None
+        record: dict[str, Any]
+        if current is None or is_legacy(current):
+            # 구버전 레코드는 덮어쓰지 않고 새 구조로 시작한다(구버전 파일은 legacy 키에 남긴다).
+            record = {"schemaVersion": SCHEMA_VERSION, "stages": {}}
+            if current is not None:
+                record["legacy"] = current
+        else:
+            record = dict(current)
+            record.setdefault("stages", {})
+
+        record.update(
+            {
+                "taskId": task_id,
+                "traceId": trace_id,
+                "env": env,
+                "traceName": trace_name,
+                "name": trace_name,  # 기존 화면이 쓰던 키를 유지한다
+                "date": date,
+                "updatedAt": now_iso(),
+            }
         )
+        for key, score in results.items():
+            record["stages"][key] = {
+                "rubricRef": rubric_refs.get(key),
+                "judgedAt": now_iso(),
+                "evidence": evidence_summaries.get(key) or {},
+                "scorecard": score.to_dict(),
+            }
+        record["composite"] = _recompute_composite(record)
+        store.save_json(evaluation_file(task_id), record)
+        if results:
+            append_history(
+                task_id=task_id,
+                trace_id=trace_id,
+                env=env,
+                trace_name=trace_name,
+                date=date,
+                results=results,
+                rubric_refs=rubric_refs,
+                trace_meta=trace_meta,
+                run_id=run_id,
+            )
     return record
 
 
@@ -161,13 +175,14 @@ def append_history(
     results: dict[str, StageScore],
     rubric_refs: dict[str, dict[str, Any]],
     trace_meta: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> str:
     """채점 실행 하나를 이력에 덧붙인다(한 줄 = 단계 1회 채점).
 
     같은 단계를 여러 번 채점하면 최신 결과만 `evaluation_file` 에 남지만, 이력에는 실행마다 한 줄씩
     쌓인다. 채점자가 실행마다 다른 점수를 내므로 편차를 보려면 이 이력이 필요하다.
     """
-    run_id = uuid4().hex[:12]
+    run_id = run_id or new_run_id()
     stamp = now_iso()
     path = evaluation_history_file(task_id)
     path.parent.mkdir(parents=True, exist_ok=True)

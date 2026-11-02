@@ -85,21 +85,23 @@ def get_or_create(name: str, content: str, *, note: str = "", source: str = "man
 
     source: 'manual'(명시적 저장) | 'judge'(채점 시 자동) | 'seed' 등 생성 맥락.
     """
-    versions = list_versions(name)
-    for v in versions:
-        if v.get("content") == content:
-            return v
+    # 잠그지 않으면 두 프로세스가 같은 번호를 고르거나 같은 본문을 두 버전으로 만든다.
+    with store.locked(prompt_dir(name)):
+        versions = list_versions(name)
+        for v in versions:
+            if v.get("content") == content:
+                return v
 
-    next_version = versions[-1]["version"] + 1 if versions else 1
-    parent = versions[-1]["version"] if versions else None
-    record: dict[str, Any] = {
-        "name": name,
-        "version": next_version,
-        "createdAt": _now_iso(),
-        "parent": parent,
-        "note": (note or "").strip(),
-        "source": source,
-        "content": content,
-    }
-    store.save_json(prompt_version_file(name, next_version), record)
+        next_version = versions[-1]["version"] + 1 if versions else 1
+        parent = versions[-1]["version"] if versions else None
+        record: dict[str, Any] = {
+            "name": name,
+            "version": next_version,
+            "createdAt": _now_iso(),
+            "parent": parent,
+            "note": (note or "").strip(),
+            "source": source,
+            "content": content,
+        }
+        store.save_json(prompt_version_file(name, next_version), record)
     return record

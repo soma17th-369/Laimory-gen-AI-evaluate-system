@@ -6,7 +6,8 @@ import unittest
 
 from streamlit.util import ReadOnlyAttributeDictionary
 
-from app.ui.task_review import _is_scorable, _picked_row, _selectable_rows, display_rows
+from app.tasks.review import is_scorable
+from app.ui.task_review import _picked_row, _selectable_rows, display_rows
 
 
 def _selection(rows: list[int]) -> ReadOnlyAttributeDictionary:
@@ -42,16 +43,16 @@ class ScorableFilterTests(unittest.TestCase):
         for name in ("generate-timeline", "update-user-memory"):
             with self.subTest(name=name):
                 self.assertTrue(
-                    _is_scorable({"name": name, "taskId": "01a0413d-1e34-7785-b1dc-5e8bc5321f02"})
+                    is_scorable({"name": name, "taskId": "01a0413d-1e34-7785-b1dc-5e8bc5321f02"})
                 )
 
     def test_test_runs_and_fragment_traces_are_dropped(self) -> None:
-        self.assertFalse(_is_scorable({"name": "generate-timeline", "taskId": "task-test"}))
-        self.assertFalse(_is_scorable({"name": "main-agent", "taskId": "task-test"}))
+        self.assertFalse(is_scorable({"name": "generate-timeline", "taskId": "task-test"}))
+        self.assertFalse(is_scorable({"name": "main-agent", "taskId": "task-test"}))
         self.assertFalse(
-            _is_scorable({"name": "call-llm", "taskId": "01a0413d-1e34-7785-b1dc-5e8bc5321f02"})
+            is_scorable({"name": "call-llm", "taskId": "01a0413d-1e34-7785-b1dc-5e8bc5321f02"})
         )
-        self.assertFalse(_is_scorable({"name": "generate-timeline", "taskId": None}))
+        self.assertFalse(is_scorable({"name": "generate-timeline", "taskId": None}))
 
     def test_filter_keeps_list_order(self) -> None:
         rows = [

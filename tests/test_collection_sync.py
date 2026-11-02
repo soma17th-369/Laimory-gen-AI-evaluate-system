@@ -152,6 +152,17 @@ class CollectionSyncTests(unittest.TestCase):
         self.assertEqual((second.added, second.total), (2, 6))
         self.assertTrue(second.completed)
 
+    def test_broken_collection_stops_the_sync_instead_of_overwriting_it(self) -> None:
+        """깨진 파일을 빈 목록으로 읽으면 쌓인 로그가 이번에 받은 행으로 덮어써진다."""
+        server = self._server([_trace(1)])
+        collect.collection_file().write_text("[ 끊긴", encoding="utf-8")
+
+        with self.assertRaises(store.CorruptJson):
+            collect.sync(environments.DEV)
+
+        self.assertEqual(collect.collection_file().read_text(encoding="utf-8"), "[ 끊긴")
+        self.assertEqual(server.calls, [])
+
     def test_interrupted_backfill_does_not_skip_the_gap_below_older_snapshot_rows(self) -> None:
         """예전 스냅샷의 최신 행이 남아 있어도 커서는 훑은 구간의 끝까지만 전진해야 한다."""
         newest = _trace(99)
