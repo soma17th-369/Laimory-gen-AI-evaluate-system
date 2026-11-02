@@ -347,11 +347,7 @@ def render() -> None:
             trace_id=selected,
             env=env,
             workers=int(st.session_state.get(f"workers_{selected}", 3)),
-            trace_meta={
-                "cost": summary.get("total_cost"),
-                "latency": summary.get("latency"),
-                "tokens": ((trace_json.get("operation") or {}).get("tokenUsage") or {}).get("totalTokens"),
-            },
+            trace_meta=review.trace_meta(summary, trace_json),
         )
         st.rerun()
 

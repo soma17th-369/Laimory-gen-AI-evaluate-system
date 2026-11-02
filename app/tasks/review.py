@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable
+from datetime import datetime
+from typing import Any, Callable, Collection
 
+from app import environments
 from app.analysis import evaluation_record, evidence, stage_judge, stages
 from app.analysis.stage_schema import StageScore
+from app.collect import sync
 from app.langfuse_client import get_trace
 from app.storage import store
 from app.storage.paths import task_trace_file
@@ -61,6 +64,47 @@ def scored_index() -> dict[str, dict[str, Any]]:
     return {
         str(record.get("taskId") or path.stem): record
         for path, record in evaluation_record.load_all()
+    }
+
+
+def find_row(trace_id: str) -> dict[str, Any] | None:
+    """수집 저장소에서 트레이스 행 하나를 찾는다. 없으면 None."""
+    return next((row for row in sync.load_rows() if row.get("id") == trace_id), None)
+
+
+def list_scorable(
+    envs: Collection[str],
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    name: str | None = None,
+    only_unscored: bool = False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """채점 대상 행을 최신순으로 고른다. 저장된 종합 점수를 `score` 로 붙인다(미채점은 None)."""
+    scored = scored_index()
+    found: list[dict[str, Any]] = []
+    for row in environments.keep(sync.load_rows(), envs):
+        stamp = sync.parse_timestamp(row.get("timestamp"))
+        if not row.get("id") or stamp is None or not is_scorable(row):
+            continue
+        if (since and stamp < since) or (until and stamp > until) or (name and row.get("name") != name):
+            continue
+        score = ((scored.get(row["taskId"]) or {}).get("composite") or {}).get("score")
+        if only_unscored and score is not None:
+            continue
+        found.append(row | {"score": score})
+        if len(found) >= limit:
+            break
+    return found
+
+
+def trace_meta(row: dict[str, Any], trace_json: dict) -> dict[str, Any]:
+    """채점 이력에 함께 남기는 대상 파이프라인의 비용. 점수와는 무관하다."""
+    return {
+        "cost": row.get("total_cost"),
+        "latency": row.get("latency"),
+        "tokens": ((trace_json.get("operation") or {}).get("tokenUsage") or {}).get("totalTokens"),
     }
 
 
