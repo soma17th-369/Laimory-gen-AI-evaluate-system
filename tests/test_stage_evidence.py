@@ -357,7 +357,191 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("generate-timeline", built.skip_reason)
 
 
+_CLUE_DRAFT = {"events": [{"clientEventId": "event-001", "title": "점심을 먹음", "baseEventIds": ["E1"]}], "warnings": []}
+_CONFIRMED = {"events": [{"clientEventId": "event-001", "title": "점심을 먹음", "description": "{place}에서 밥을 먹었다."}], "warnings": []}
+
+
+def _v4_timeline_trace() -> SimpleNamespace:
+    """v4 `generate-timeline` 한 건. 위치·일정은 코드가 만들고 사진·알림은 단서 호출이 낸다."""
+    trace = _timeline_trace()
+    kept = [
+        obs
+        for obs in trace.observations
+        if not obs.name.startswith("event-agent-") and obs.name not in ("merge-event-results", "describe-photo-images")
+    ]
+    for obs in kept:
+        if obs.name == "timeline-agent":
+            obs.output = {"timeline": _CLUE_DRAFT}
+        if obs.name == "generate-timeline-draft":
+            obs.input = [
+                {"role": "system", "content": "# Timeline 시스템 프롬프트\n\n## 당신의 역할"},
+                {
+                    "role": "user",
+                    "content": "[draft metadata]\ndate: 2026-09-04\n\n[하루]\n집 → 회사\n\n[근거 묶음]\nB1 E1 회사 체류\n\n"
+                    "[빈 시간]\n없음\n\n[알림]\n없음\n\n[user memory]\n혼자 사는 개발자",
+                },
+            ]
+    clue_steps = [
+        _obs(
+            "clue-agent-photo",
+            "AGENT",
+            parent="main-agent",
+            metadata={"agent": "photo", "sourceStage": "clue"},
+            inp={"request": _REQUEST},
+            out={"clueCount": 1, "warningCount": 0, "clues": [{"id": "P1", "rawId": "photo-1", "activity": "점심을 먹음"}]},
+        ),
+        _obs(
+            "describe-photo-images",
+            "GENERATION",
+            parent="clue-agent-photo",
+            inp=[{"role": "system", "content": "사진 묘사"}],
+            out=[{"role": "assistant", "content": '{"descriptions":[{"rawId":"photo-1","description":"햄버거"}]}'}],
+        ),
+        _obs(
+            "infer-photo-events",
+            "GENERATION",
+            parent="clue-agent-photo",
+            inp=[{"role": "system", "content": "# 사진 해석 시스템 프롬프트"}],
+            out=[{"role": "assistant", "content": "{}"}],
+        ),
+        _obs(
+            "clue-agent-notification",
+            "AGENT",
+            parent="main-agent",
+            metadata={"agent": "notification", "sourceStage": "clue"},
+            inp={"request": _REQUEST},
+            out={"clueCount": 1, "warningCount": 2, "clues": [{"id": "N1", "kind": "CONVERSATION", "rawIds": ["noti-1"]}]},
+        ),
+        _obs("build-clue-bundles", "CHAIN", parent="main-agent", metadata={"contract": "clue"}, out={"bundleCount": 1}),
+        _obs(
+            "confirm-timeline-draft",
+            "CHAIN",
+            parent="repair-agent",
+            metadata={"phase": "initial"},
+            out={"timeline": _CONFIRMED},
+        ),
+    ]
+    trace.observations = kept[:1] + clue_steps + kept[1:]
+    return trace
+
+
+class PipelineVersionTests(unittest.TestCase):
+    def _with_draft_system(self, text: str) -> dict:
+        trace = _timeline_trace()
+        for observation in trace.observations:
+            if observation.name == "generate-timeline-draft":
+                observation.input = [{"role": "system", "content": text}, observation.input[1]]
+        return build_trace_json(trace)
+
+    def test_clue_steps_mean_v4(self) -> None:
+        self.assertEqual(evidence.pipeline_version(build_trace_json(_v4_timeline_trace())), "v4")
+
+    def test_v1_to_v3_share_a_heading_and_differ_by_a_section(self) -> None:
+        head = "# Timeline Agent 시스템 프롬프트\n\n## Laimory 공통 제품 비전\n\n"
+        self.assertEqual(evidence.pipeline_version(self._with_draft_system(head + "## 1단계. 하루의 구조 파악")), "v3")
+        self.assertEqual(evidence.pipeline_version(self._with_draft_system(head + "## 결과 문장의 말투")), "v2")
+        self.assertEqual(evidence.pipeline_version(self._with_draft_system(head + "## 근거 우선순위와 융합 강령")), "v2")
+        self.assertEqual(evidence.pipeline_version(self._with_draft_system(head + "## 핵심 판단 원칙")), "v1")
+        self.assertIsNone(evidence.pipeline_version(self._with_draft_system(head)))
+
+    def test_truncated_prompt_still_tells_the_version(self) -> None:
+        trace = _timeline_trace()
+        preview = '[{"content":"# Timeline Agent 시스템 프롬프트\\n\\n## 1단계. 하루의 구조 파악\\n…길다'
+        for observation in trace.observations:
+            if observation.name == "generate-timeline-draft":
+                observation.input = {"body": {"truncated": True, "contentPreview": preview}}
+
+        self.assertEqual(evidence.pipeline_version(build_trace_json(trace)), "v3")
+
+    def test_user_memory_versions(self) -> None:
+        def version(system: str) -> str | None:
+            trace = _user_memory_trace()
+            trace.observations[1].input = [{"role": "system", "content": system}, trace.observations[1].input[1]]
+            return evidence.pipeline_version(build_trace_json(trace))
+
+        self.assertEqual(version("`changes` 가 변경 목록이고\n### 장소 이름"), "v4")
+        self.assertEqual(version("`changes` 가 변경 목록이고"), "v3")
+        self.assertEqual(version("# User Memory 갱신 시스템 프롬프트"), "v2")
+
+
+class V4EvidenceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.trace_json = build_trace_json(_v4_timeline_trace())
+        self.evidences = {item.key: item for item in evidence.build_all(self.trace_json)}
+
+    def _section(self, key: str, title: str):
+        return next(section.payload for section in self.evidences[key].sections if section.title == title)
+
+    def test_code_made_sources_are_not_scored_as_llm_stages(self) -> None:
+        for key in ("event-location", "event-calendar"):
+            with self.subTest(key=key):
+                self.assertFalse(self.evidences[key].applicable)
+                self.assertIn("코드", self.evidences[key].skip_reason)
+
+    def test_photo_and_notification_read_clues_not_result(self) -> None:
+        photo = self._section("event-photo", "출력 단서")
+        notification = self._section("event-notification", "출력 단서")
+
+        self.assertEqual(photo["clues"][0]["activity"], "점심을 먹음")
+        self.assertEqual(notification["clues"][0]["id"], "N1")
+        self.assertEqual(self.evidences["event-notification"].summary["warnings"], 2)
+        self.assertIn("햄버거", str(self._section("event-photo", "Vision 결과")))
+
+    def test_photo_prompt_is_the_interpretation_call_not_vision(self) -> None:
+        prompt = self._section("event-photo", "Photo Event Agent 프롬프트")
+        self.assertIn("사진 해석", str(prompt))
+
+    def test_timeline_reads_the_clue_bundles_from_the_prompt(self) -> None:
+        bundles = self._section("timeline", "입력 근거 묶음")
+
+        self.assertEqual(bundles["근거 묶음"], "B1 E1 회사 체류")
+        self.assertEqual(bundles["하루"], "집 → 회사")
+        self.assertEqual(self._section("timeline", "입력 User Memory"), "혼자 사는 개발자")
+        self.assertEqual(self._section("timeline", "출력 draft timeline"), _CLUE_DRAFT)
+
+    def test_repair_starts_from_the_first_confirmed_draft(self) -> None:
+        self.assertEqual(self._section("repair", "수정 전 draft"), _CONFIRMED)
+        results = self._section("repair", "근거 원본")["eventResults"]
+        self.assertEqual(results["photo"][0]["id"], "P1")
+
+    def test_header_names_the_pipeline_version(self) -> None:
+        self.assertEqual(self._section("timeline", "실행 정보")["pipelineVersion"], "v4")
+
+
+class TruncatedPromptTests(unittest.TestCase):
+    def test_recovers_complete_and_cut_messages(self) -> None:
+        preview = '[{"content":"시스템 \\"지시\\"","role":"system"},{"content":"[user memory]\\n개발자\\n\\n[events]\\n[{\\"a\\": 1'
+        messages = evidence.recover_messages(preview)
+
+        self.assertEqual(messages[0], {"role": "system", "content": '시스템 "지시"'})
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertTrue(messages[1]["truncated"])
+        self.assertIn('[{"a": 1', messages[1]["content"])
+
+    def test_cut_inside_an_escape_is_trimmed(self) -> None:
+        messages = evidence.recover_messages('[{"content":"앞부분\\u12')
+        self.assertEqual(messages[0]["content"], "앞부분")
+
+    def test_truncated_user_prompt_marks_the_cut(self) -> None:
+        trace = _timeline_trace()
+        preview = '[{"content":"지시","role":"system"},{"content":"[user memory]\\n혼자 사는 개발자\\n\\n[AI Event'
+        for observation in trace.observations:
+            if observation.name == "generate-timeline-draft":
+                observation.input = {"body": {"truncated": True, "contentPreview": preview}}
+        timeline = evidence.build(build_trace_json(trace), "timeline")
+        memory = next(section.payload for section in timeline.sections if section.title == "입력 User Memory")
+
+        self.assertIn("혼자 사는 개발자", memory)
+        prompt = next(section for section in timeline.sections if section.title.endswith("프롬프트"))
+        self.assertIn("잘려", prompt.note)
+
+
 class PromptSectionTests(unittest.TestCase):
+    def test_korean_block_names(self) -> None:
+        text = "[하루]\n집 → 회사\n\n[근거 묶음]\nB1\n\n[user memory]\n정보 없음"
+        self.assertEqual(evidence.prompt_section(text, "근거 묶음"), "B1")
+        self.assertEqual(evidence.prompt_section(text, "하루"), "집 → 회사")
+
     def test_json_array_is_not_mistaken_for_next_section_header(self) -> None:
         text = '[events]\n[{"clientEventId":"E1"}]\n\n위 목록으로 질문을 작성하세요.'
         body = evidence.prompt_section(text, "events")
