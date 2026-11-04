@@ -1,17 +1,17 @@
 """평가 대상(단계)과 배점표 — 단계별 채점의 **유일한 정본**.
 
-메트릭 문서는 평가 대상을 8개로 나누고 각 대상을 100점으로 채점한다. 이 모듈은 그 8개와
+메트릭 문서(v6)는 평가 대상을 7개로 나누고 각 대상을 100점으로 채점한다. 이 모듈은 그 7개와
 항목·배점을 코드로 고정하고, 각 항목이 문서의 어느 구절에서 왔는지(`marker`)를 함께 들고 있다.
 
 - 항목 문장 자체는 코드에 복사하지 않는다. [criteria][app.analysis.stages.criteria] 가 문서에서
   **항목별 확인 기준을 원문 그대로** 잘라 붙인다(요약·발췌 금지). 절을 통째로 붓지 않고 항목 키에
   묶어 두기 때문에, 어느 기준이 어느 배점에 속하는지가 프롬프트에서도 화면에서도 분명하다.
-- `marker` 는 문서에서 그 항목이 시작하는 구절이다(heading 한 줄이거나 표 한 줄). 문서에서 항목이
-  사라지거나 배점이 바뀌면 [validate][app.analysis.stages.validate] 가 실패해 **조용히 일부만
-  채점되는 상태**를 막는다.
+- `marker` 는 문서에서 그 항목이 시작하는 heading 한 줄이다. 문서에서 항목이 사라지거나 배점이
+  바뀌면 [validate][app.analysis.stages.validate] 가 실패해 **조용히 일부만 채점되는 상태**를 막는다.
 - 그래서 문서의 배점을 고치면 이 표도 같은 커밋에서 고쳐야 한다.
 
-Sleep/Activity Agent 는 문서에서 deprecated 라 대상에 없다.
+v6 는 프롬프트 세트(v2·v3·v4)가 달라도 같은 기준으로 잰다. 그래서 v4 에 LLM 단계가 없는 위치·일정은
+단계로 두지 않고, 사용자가 받은 결과를 재는 `final` 이 함께 본다.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class StageSpec:
     label: str
     trace_name: str
     doc_intro: tuple[str, ...]
-    """항목 절 앞에 붙일 문서 절(하위 절 제외). 예: Event Agent 의 합산 규칙."""
+    """항목 절 앞에 붙일 문서 절(하위 절 제외). 예: 그 단계의 근거를 버전별로 읽는 법."""
     doc_sections: tuple[str, ...]
     """항목이 들어 있는 문서 절(하위 절 포함)."""
     items: tuple[RubricItem, ...]
@@ -61,144 +61,125 @@ class StageSpec:
         raise KeyError(f"{self.key} 단계에 `{key}` 항목이 없습니다.")
 
 
-# 1.1 공통 기준 — Event Agent 4종이 같이 쓴다.
-_COMMON_ITEMS: tuple[RubricItem, ...] = (
-    RubricItem("output_format", "출력 형식", 5, "|출력 형식|"),
-    RubricItem("time_format", "시간 형식", 5, "|시간 형식|"),
-    RubricItem("window", "Window 준수", 5, "|Window 준수|"),
-    RubricItem("source_match", "Source 일치", 5, "|Source 일치|"),
-)
-
-
-def _event_stage(
+def _stage(
     key: str,
     label: str,
     section: str,
-    items: tuple[RubricItem, ...],
+    items: tuple[tuple[str, str, int, str], ...],
+    *,
+    trace_name: str = TIMELINE_TRACE,
 ) -> StageSpec:
-    """Event Agent 하나. 공통 기준 20점 + 해당 source 기준 80점."""
+    """문서 한 장이 단계 하나다. 장 머리말(근거 읽는 법)과 하위 절(항목)을 함께 쓴다.
+
+    항목은 (키, 이름, 배점, 절 번호)이고 marker 는 그 절의 heading 이다.
+    """
     return StageSpec(
         key=key,
         label=label,
-        trace_name=TIMELINE_TRACE,
-        doc_intro=("1",),
-        doc_sections=("1.1", section),
-        items=_COMMON_ITEMS + items,
+        trace_name=trace_name,
+        doc_intro=(section,),
+        doc_sections=(section,),
+        items=tuple(
+            RubricItem(item_key, item_label, points, f"### {number} {item_label} — {points}점")
+            for item_key, item_label, points, number in items
+        ),
     )
 
 
 STAGES: tuple[StageSpec, ...] = (
-    _event_stage(
-        "event-location",
-        "Location Event Agent",
-        "1.2",
-        (
-            RubricItem("movement_flow", "이동 흐름", 20, "#### 이동 흐름 — 20점"),
-            RubricItem("stay_merge", "체류 병합과 제외", 15, "#### 체류 병합과 제외 — 15점"),
-            RubricItem("transport_walk", "이동수단과 산책 추론", 10, "#### 이동수단과 산책 추론 — 10점"),
-            RubricItem("place_activity", "장소·주소와 활동 추론", 15, "#### 장소·주소와 활동 추론 — 15점"),
-            RubricItem("title_description", "제목·설명·불확실성", 10, "#### 제목·설명·불확실성 — 10점"),
-            RubricItem("source_accounting", "Source 전체 처리", 10, "#### Source 전체 처리 — 10점"),
-        ),
-    ),
-    _event_stage(
-        "event-calendar",
-        "Calendar Event Agent",
-        "1.3",
-        (
-            RubricItem("schedule_coverage", "일정 반영", 20, "모든 Calendar rawId를 candidate·fragment에 포함했는가?"),
-            RubricItem("title_time", "제목과 시간", 15, "Calendar title과 startAt·endAt을 candidate·fragment에 동일한 값으로 보존했는가?"),
-            RubricItem("event_type_tags", "EventType과 의미 태그", 20, "event의 활동을 적절한 EventType 정의와 대조하고"),
-            RubricItem("place", "장소", 10, "locationText를 places에 반영하고 URL을 장소로 사용하지 않았는가?"),
-            RubricItem("all_day", "종일 일정", 10, "all-day flag를 보존하고"),
-            RubricItem("required_fields", "필수 필드", 5, "각 일정에 title·startAt·endAt·rawId를 포함하고"),
-        ),
-    ),
-    _event_stage(
-        "event-notification",
-        "Notification Event Agent",
-        "1.4",
-        (
-            RubricItem("type_judgement", "알림 정보 유형 판단", 15, "#### 알림 정보 유형 판단 — 15점"),
-            RubricItem("messenger", "메신저", 20, "#### 메신저 — 20점"),
-            RubricItem("payment", "결제·송금", 15, "#### 결제·송금 — 15점"),
-            RubricItem("reservation", "예약", 15, "#### 예약 — 15점"),
-            RubricItem("noise_privacy", "Noise와 개인정보", 10, "#### Noise와 개인정보 — 10점"),
-            RubricItem("source_preservation", "Source 보존", 5, "#### Source 보존 — 5점"),
-        ),
-    ),
-    _event_stage(
+    _stage(
         "event-photo",
-        "Photo Event Agent",
-        "1.5",
+        "사진 해석",
+        "1",
         (
-            RubricItem("photo_description", "사진 묘사", 25, "vision 결과에 장소 유형·피사체·상황 단서"),
-            RubricItem("beyond_vision", "Vision 결과 밖 주장", 15, "이미지에서 확인되지 않는 사람·장소·행동·감정·목적을 추가하지 않았는가?"),
-            RubricItem("photo_coverage", "사진 반영", 20, "rawId와 촬영 시각을 읽었고"),
-            RubricItem("cluster_merge", "사진 cluster 병합", 15, "description 이 유사하고 촬영 시간 차이가 10분 이하인 사진을 같은 candidate로 묶었는가?"),
-            RubricItem("source_preservation", "Source 보존", 5, "묶인 사진의 모든 rawId를 보존했는가?"),
+            ("coverage", "사진 반영", 20, "1.1"),
+            ("action", "한 일 읽기", 25, "1.2"),
+            ("specificity", "구체성", 20, "1.3"),
+            ("no_fabrication", "지어내지 않기", 25, "1.4"),
+            ("privacy", "개인정보와 입력 안전", 10, "1.5"),
         ),
     ),
-    StageSpec(
-        key="timeline",
-        label="Timeline Agent",
-        trace_name=TIMELINE_TRACE,
-        doc_intro=(),
-        doc_sections=("2",),
-        items=(
-            RubricItem("title_description", "Event의 제목과 Description", 15, "### 2.1 Event의 제목과 Description — 15점"),
-            RubricItem("day_flow", "하루 흐름과 필수 반영 사건", 15, "### 2.2 하루 흐름과 필수 반영 사건 — 15점"),
-            RubricItem("event_merge", "Candidate·Fragment 병합", 25, "### 2.3 Candidate와 Fragment 를 통한 이벤트 병합 — 25점"),
-            RubricItem("source_final", "Source별 최종 반영", 12, "### 2.6 Source별 최종 반영 — 12점"),
-            RubricItem("event_type", "EventType", 8, "### 2.5 EventType — 8점"),
-            RubricItem("time", "시간", 8, "### 2.7 시간 — 8점"),
-            RubricItem("place", "장소와 주소", 5, "### 2.8 장소와 주소 — 5점"),
-            RubricItem("confidence", "Confidence와 InferenceLevel", 2, "### 2.9 Confidence와 InferenceLevel — 2점"),
-            RubricItem("warnings_memory", "Warnings와 User Memory", 10, "### 2.10 Warnings와 User Memory — 10점"),
+    _stage(
+        "event-notification",
+        "알림 해석",
+        "2",
+        (
+            ("content_judgement", "내용으로 가리고 살리기", 25, "2.1"),
+            ("noise", "잡음 거르기", 15, "2.2"),
+            ("no_fabrication", "지어내지 않기", 20, "2.3"),
+            ("conversation", "대화", 15, "2.4"),
+            ("schedule_date", "일정 날짜", 15, "2.5"),
+            ("privacy", "개인정보와 처리", 10, "2.6"),
         ),
     ),
-    StageSpec(
-        key="repair",
-        label="Repair Agent",
-        trace_name=TIMELINE_TRACE,
-        doc_intro=(),
-        doc_sections=("3",),
-        items=(
-            RubricItem("input_evidence", "입력과 근거 이해", 15, "### 3.1 입력과 근거 이해 — 15점"),
-            RubricItem("issue_detection", "문제 발견", 25, "### 3.2 문제 발견 — 25점"),
-            RubricItem("source_type_defects", "Source 유형별 문제 수정", 15, "### 3.3 Source 유형별 문제 수정 — 15점"),
-            RubricItem("tool_selection", "Tool 선택과 실행 결과", 20, "### 3.4 Tool 선택과 실행 결과 — 20점"),
-            RubricItem("unrelated_edits", "관계없는 수정과 문제 수 변화", 20, "### 3.5 관계없는 수정과 문제 수 변화 — 20점"),
-            RubricItem("done_summary", "완료 상태와 Summary", 5, "### 3.6 완료 상태와 Summary — 5점"),
+    _stage(
+        "timeline",
+        "Timeline 초안",
+        "3",
+        (
+            ("day_flow", "하루 흐름과 사건 존재", 14, "3.1"),
+            ("composition", "사건 구성", 20, "3.2"),
+            ("source_use", "근거별 반영", 14, "3.3"),
+            ("event_type", "EventType", 10, "3.4"),
+            ("time", "시간", 8, "3.5"),
+            ("writing", "문장", 20, "3.6"),
+            ("place", "장소", 4, "3.7"),
+            ("memory_confidence", "User Memory·확신도·warnings", 10, "3.8"),
         ),
     ),
-    StageSpec(
-        key="question",
-        label="Question Agent",
-        trace_name=TIMELINE_TRACE,
-        doc_intro=(),
-        doc_sections=("4",),
-        items=(
-            RubricItem("event_grounding", "Event 이해와 근거", 20, "### 4.1 Event 이해와 근거 — 20점"),
-            RubricItem("reflection", "회고 유도 조건", 30, "### 4.2 회고 유도 조건 — 30점"),
-            RubricItem("expression", "질문 표현", 20, "### 4.3 질문 표현 — 20점"),
-            RubricItem("coverage", "모든 Event의 질문 생성", 20, "### 4.4 모든 Event의 질문 생성 — 20점"),
-            RubricItem("uniqueness", "질문 고유성과 연결", 10, "### 4.5 질문 고유성과 연결 — 10점"),
+    _stage(
+        "repair",
+        "Repair",
+        "4",
+        (
+            ("issue_resolution", "받은 문제 해소", 25, "4.1"),
+            ("grounded_fixes", "고친 값의 근거", 25, "4.2"),
+            ("unrelated_edits", "관계없는 수정과 되돌림", 20, "4.3"),
+            ("tool_use", "도구 사용", 10, "4.4"),
+            ("writing", "문장", 10, "4.5"),
+            ("done_summary", "완료 판단과 보고", 10, "4.6"),
         ),
     ),
-    StageSpec(
-        key="user-memory",
-        label="User Memory Agent",
+    _stage(
+        "question",
+        "질문",
+        "5",
+        (
+            # deterministic_checks 가 coverage c01·c02 와 expression c02 를 코드로 판정한다.
+            # 이 항목의 기준 순서를 바꾸면 그쪽도 같이 고친다.
+            ("event_grounding", "Event 이해와 근거", 20, "5.1"),
+            ("reflection", "회고 유도 조건", 30, "5.2"),
+            ("expression", "질문 표현", 20, "5.3"),
+            ("coverage", "모든 Event의 질문 생성", 20, "5.4"),
+            ("uniqueness", "질문 고유성과 연결", 10, "5.5"),
+        ),
+    ),
+    _stage(
+        "final",
+        "최종 타임라인",
+        "6",
+        (
+            ("day_flow", "하루 흐름과 빠진 사건", 20, "6.1"),
+            ("composition", "사건 구성", 20, "6.2"),
+            ("grounding", "사실의 근거", 20, "6.3"),
+            ("time", "시간", 10, "6.4"),
+            ("event_type", "EventType", 10, "6.5"),
+            ("place", "장소", 10, "6.6"),
+            ("writing", "문장", 10, "6.7"),
+        ),
+    ),
+    _stage(
+        "user-memory",
+        "User Memory",
+        "7",
+        (
+            ("grounding", "근거와 확인 정도", 30, "7.1"),
+            ("about_person", "사람에 대한 정보", 15, "7.2"),
+            ("merge_preserve", "병합과 보존", 25, "7.3"),
+            ("placement", "항목 배치", 15, "7.4"),
+            ("format_privacy", "형식·크기·개인정보", 15, "7.5"),
+        ),
         trace_name=USER_MEMORY_TRACE,
-        doc_intro=(),
-        doc_sections=("5",),
-        items=(
-            RubricItem("provenance", "입력 근거 구분", 20, "### 5.1 입력 근거 구분 — 20점"),
-            RubricItem("update_method", "전체 갱신 방식", 15, "### 5.2 전체 갱신 방식 — 15점"),
-            RubricItem("field_placement", "근거 일치와 Field 배치", 30, "### 5.3 근거 일치와 Field 배치 — 30점"),
-            RubricItem("field_confusion", "Field 혼동과 customAttributes", 15, "### 5.4 Field 혼동과 customAttributes — 15점"),
-            RubricItem("size_privacy", "크기·압축·개인정보", 20, "### 5.5 크기·압축·개인정보 — 20점"),
-        ),
     ),
 )
 

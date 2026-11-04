@@ -82,11 +82,11 @@ class TallyTests(unittest.TestCase):
         """평가할 입력이 없는 항목은 감점하지 않고 배점을 나머지에 비례 배분한다(문서 규칙)."""
         spec = stages.get("event-photo")
 
-        score = stage_schema.tally(spec, _card("event-photo", skipped={"cluster_merge"}))
+        score = stage_schema.tally(spec, _card("event-photo", skipped={"privacy"}))
 
         self.assertEqual(score.total, 100.0)
-        self.assertEqual(score.redistributed, ("cluster_merge",))
-        skipped_item = next(item for item in score.items if item.key == "cluster_merge")
+        self.assertEqual(score.redistributed, ("privacy",))
+        skipped_item = next(item for item in score.items if item.key == "privacy")
         self.assertFalse(skipped_item.applied)
         self.assertEqual(skipped_item.applied_points, 0.0)
 
@@ -98,10 +98,10 @@ class TallyTests(unittest.TestCase):
         self.assertEqual(score.total, 100.0)
 
     def test_all_items_unevaluable_means_no_score(self) -> None:
-        spec = stages.get("event-calendar")
+        spec = stages.get("event-notification")
 
         score = stage_schema.tally(
-            spec, _card("event-calendar", skipped={item.key for item in spec.items})
+            spec, _card("event-notification", skipped={item.key for item in spec.items})
         )
 
         self.assertIsNone(score.total)
@@ -119,14 +119,14 @@ class CompositeTests(unittest.TestCase):
         scores = [
             stage_schema.tally(stages.get("question"), _card("question", scores={"reflection": 0})),
             stage_schema.tally(stages.get("timeline"), _card("timeline")),
-            stage_schema.skipped(stages.get("event-calendar"), "입력이 0건입니다."),
+            stage_schema.skipped(stages.get("event-notification"), "입력이 0건입니다."),
         ]
 
         composite = stage_schema.composite(scores)
 
         self.assertEqual(composite["evaluatedCount"], 2)
         self.assertEqual(composite["score"], round((70.0 + 100.0) / 2, 1))
-        self.assertIn("event-calendar", composite["skipped"])
+        self.assertIn("event-notification", composite["skipped"])
 
     def test_nothing_evaluated_has_no_composite(self) -> None:
         composite = stage_schema.composite([stage_schema.skipped(stages.get("repair"), "반복 없음")])
@@ -179,7 +179,41 @@ class EvaluationRecordTests(unittest.TestCase):
         record = self._save("timeline", scores={"day_flow": 0})
 
         self.assertEqual(record["stages"]["question"]["scorecard"]["total"], 100.0)
-        self.assertEqual(record["stages"]["timeline"]["scorecard"]["total"], 85.0)
+        self.assertEqual(record["stages"]["timeline"]["scorecard"]["total"], 86.0)
+
+    def test_saved_stage_carries_the_metric_and_pipeline_version(self) -> None:
+        record = evaluation_record.save_stages(
+            task_id="task-1",
+            trace_id="trace-1",
+            env="dev",
+            trace_name="generate-timeline",
+            date="2026-09-04",
+            results={"timeline": stage_schema.tally(stages.get("timeline"), _card("timeline"))},
+            rubric_refs={"timeline": {"name": "judge-stage-timeline", "version": 1}},
+            evidence_summaries={"timeline": {"summary": {"pipelineVersion": "v4"}, "sections": []}},
+        )
+
+        self.assertEqual(record["stages"]["timeline"]["metric"], "v6")
+        self.assertEqual(record["stages"]["timeline"]["pipelineVersion"], "v4")
+        self.assertEqual(evaluation_record.load_history("task-1")[0]["metric"], "v6")
+
+    def test_stages_scored_under_an_older_metric_leave_the_composite(self) -> None:
+        """기준이 다른 점수를 한 평균에 섞지 않는다. 이전 기준 결과는 previousMetric 에 남는다."""
+        self._save("timeline")
+        path = evaluation_record.evaluation_file("task-1")
+        stored = store.load_json(path)
+        stored["stages"]["event-location"] = {"scorecard": {"total": 40.0}}  # metric 없는 v5 결과
+        stored["stages"]["question"] = {"metric": "v5", "scorecard": {"total": 50.0}}
+        store.save_json(path, stored)
+
+        view = evaluation_record.load("task-1")
+        self.assertEqual(set(view["stages"]), {"timeline"})
+        self.assertEqual(set(view["previousMetric"]), {"event-location", "question"})
+        self.assertEqual(view["composite"]["score"], 100.0)
+
+        record = self._save("question")
+        self.assertEqual(set(record["stages"]), {"timeline", "question"})
+        self.assertEqual(store.load_json(path)["previousMetric"]["question"]["scorecard"]["total"], 50.0)
 
     def test_legacy_record_is_read_only_and_kept(self) -> None:
         legacy = {"taskId": "task-1", "scorecard": {"overall": {"score": 7}}}

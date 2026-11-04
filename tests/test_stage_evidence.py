@@ -254,24 +254,40 @@ class EvidenceTests(unittest.TestCase):
         self.trace_json = build_trace_json(_timeline_trace())
         self.evidences = {item.key: item for item in evidence.build_all(self.trace_json)}
 
-    def test_timeline_trace_covers_seven_targets(self) -> None:
-        self.assertEqual(len(self.evidences), 7)
-        self.assertNotIn("user-memory", self.evidences)
+    def test_timeline_trace_covers_six_targets(self) -> None:
+        self.assertEqual(
+            list(self.evidences), ["event-photo", "event-notification", "timeline", "repair", "question", "final"]
+        )
 
     def test_event_agent_only_sees_its_own_source(self) -> None:
-        location = self.evidences["event-location"]
-        payload = next(section.payload for section in location.sections if section.title == "입력 source")
+        notification = self.evidences["event-notification"]
+        payload = next(section.payload for section in notification.sections if section.title == "입력 source")
 
-        self.assertEqual(set(payload), {"stays", "movements"})
-        prompt = evidence.build_user_prompt(location)
-        self.assertIn("stay-1", prompt)
-        self.assertNotIn("noti-1", prompt)
+        self.assertEqual(set(payload), {"notifications"})
+        prompt = evidence.build_user_prompt(notification)
+        self.assertIn("noti-1", prompt)
+        self.assertNotIn("stay-1", prompt)
 
     def test_empty_source_is_not_scored(self) -> None:
-        calendar = self.evidences["event-calendar"]
+        trace_json = build_trace_json(_timeline_trace())
+        trace_json["source"]["photos"] = []
+        photo = evidence.build(trace_json, "event-photo")
 
-        self.assertFalse(calendar.applicable)
-        self.assertIn("0건", calendar.skip_reason)
+        self.assertFalse(photo.applicable)
+        self.assertIn("0건", photo.skip_reason)
+
+    def test_final_compares_the_delivered_timeline_with_every_source(self) -> None:
+        final = self.evidences["final"]
+        sections = {section.title: section.payload for section in final.sections}
+
+        self.assertEqual(set(sections["입력 수집 원본"]) >= {"stays", "movements", "notifications", "photos"}, True)
+        self.assertEqual(sections["입력 User Memory"], "혼자 사는 개발자")
+        self.assertIn("햄버거", str(sections["Vision 결과"]))
+        # 질문은 질문 단계에서 따로 잰다.
+        self.assertEqual(sections["출력 최종 타임라인"]["events"], [{"clientEventId": "event-001", "title": "고친 뒤"}])
+
+    def test_summary_carries_the_pipeline_version(self) -> None:
+        self.assertIsNone(self.evidences["timeline"].summary["pipelineVersion"])
 
     def test_photo_evidence_carries_vision_result(self) -> None:
         photo = self.evidences["event-photo"]
@@ -472,11 +488,12 @@ class V4EvidenceTests(unittest.TestCase):
     def _section(self, key: str, title: str):
         return next(section.payload for section in self.evidences[key].sections if section.title == title)
 
-    def test_code_made_sources_are_not_scored_as_llm_stages(self) -> None:
-        for key in ("event-location", "event-calendar"):
-            with self.subTest(key=key):
-                self.assertFalse(self.evidences[key].applicable)
-                self.assertIn("코드", self.evidences[key].skip_reason)
+    def test_v4_is_scored_on_the_same_targets(self) -> None:
+        self.assertEqual(
+            [key for key, item in self.evidences.items() if item.applicable],
+            ["event-photo", "event-notification", "timeline", "repair", "question", "final"],
+        )
+        self.assertEqual(self.evidences["final"].summary["pipelineVersion"], "v4")
 
     def test_photo_and_notification_read_clues_not_result(self) -> None:
         photo = self._section("event-photo", "출력 단서")
@@ -488,7 +505,7 @@ class V4EvidenceTests(unittest.TestCase):
         self.assertIn("햄버거", str(self._section("event-photo", "Vision 결과")))
 
     def test_photo_prompt_is_the_interpretation_call_not_vision(self) -> None:
-        prompt = self._section("event-photo", "Photo Event Agent 프롬프트")
+        prompt = self._section("event-photo", "사진 해석 프롬프트")
         self.assertIn("사진 해석", str(prompt))
 
     def test_timeline_reads_the_clue_bundles_from_the_prompt(self) -> None:

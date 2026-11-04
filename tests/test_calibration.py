@@ -31,7 +31,7 @@ class CalibrationTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 calibration.CheckAssessment.model_validate({"total": 1, "passed": 0, "failedRefs": ["E1"], "reason": "r", **changes})
 
-    def test_original_criteria_and_examples_reach_all_eight_live_prompts(self):
+    def test_original_criteria_and_examples_reach_every_live_prompt(self):
         for spec in stages.STAGES:
             prompt = stage_judge.system_prompt(spec.key)
             for entry in stages.criteria(spec):
@@ -42,12 +42,12 @@ class CalibrationTests(unittest.TestCase):
             self.assertEqual(spec.total_points, 100)
 
     def test_subcriteria_are_fixed_including_nested_and_table(self):
-        self.assertEqual(len(calibration.definitions(stages.get("question"))["reflection"]), 5)
-        self.assertEqual(len(calibration.definitions(stages.get("user-memory"))["field_placement"]), 10)
-        merged = calibration.definitions(stages.get("timeline"))["event_merge"]
-        self.assertEqual(len(merged), 9)
-        self.assertIn("서로 시간 범위가 겹쳐야 한다", merged[0])
-        self.assertNotIn("코드 측정", "\n".join(calibration.definitions(stages.get("timeline"))["source_final"]))
+        self.assertEqual(len(calibration.definitions(stages.get("question"))["reflection"]), 4)
+        self.assertEqual(len(calibration.definitions(stages.get("user-memory"))["placement"]), 3)
+        composition = calibration.definitions(stages.get("timeline"))["composition"]
+        self.assertEqual(len(composition), 5)
+        self.assertIn("한 활동은 길어도", composition[0])
+        self.assertNotIn("코드 측정", "\n".join(calibration.definitions(stages.get("final"))["grounding"]))
 
     def test_live_schema_rejects_missing_or_extra_criterion(self):
         spec = stages.get("question")
@@ -75,8 +75,9 @@ class CalibrationTests(unittest.TestCase):
         payload["items"]["reflection"]["c03"] = assessment(1, 0).model_dump()
         card = calibration.result_model(spec).model_validate(payload)
         result = calibration.score(spec, card).to_dict()
-        self.assertEqual(result["total"], 94)
-        self.assertEqual(next(row["score"] for row in result["items"] if row["key"] == "reflection"), 24)
+        # 30 × (1+1+0+1)/4 = 22.5 → .5 이상 올림 23
+        self.assertEqual(result["total"], 93)
+        self.assertEqual(next(row["score"] for row in result["items"] if row["key"] == "reflection"), 23)
         self.assertEqual(result["scoringPolicy"], calibration.POLICY_VERSION)
         self.assertIn("c03", result["checks"]["reflection"])
         from app.analysis.evaluation_record import to_stage_scores

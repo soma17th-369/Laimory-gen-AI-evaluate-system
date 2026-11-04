@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.analysis import stages
@@ -26,12 +26,14 @@ from app.analysis.stages import StageSpec
 from app.tasks.trace_builder import resolve
 
 _EVENT_AGENTS = {
-    "event-location": ("location", ("stays", "movements")),
-    "event-calendar": ("calendar", ("calendars",)),
     "event-notification": ("notification", ("notifications",)),
     "event-photo": ("photo", ("photos",)),
 }
-"""stageKey → (metadata.agent 값, 그 단계가 실제로 담당하는 source 배열)."""
+"""stageKey → (metadata.agent 값, 그 단계가 실제로 담당하는 source 배열).
+
+위치·일정은 v4 에 LLM 단계가 없어 버전을 가로질러 같은 자로 잴 수 없으므로 단계로 두지 않는다.
+그 결과는 `final` 이 사용자가 받은 타임라인으로 함께 본다.
+"""
 
 # v4 Timeline 프롬프트는 칸 이름이 한글이다(`[하루]`·`[근거 묶음]`·`[빈 시간]`·`[알림]`).
 _PROMPT_SECTION = re.compile(r"^\[(?P<name>[A-Za-z가-힣][A-Za-z0-9가-힣 _-]*)\][ \t]*$", re.MULTILINE)
@@ -301,8 +303,6 @@ def _event_agent_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     total = sum(counts.values())
 
     if step is None:
-        if pipeline_version(trace_json) == "v4":
-            return StageEvidence(spec, False, "v4 는 이 source 를 LLM 이 아니라 코드로 처리합니다.", counts)
         return StageEvidence(spec, False, f"{spec.label} 관측치가 트레이스에 없습니다.", counts)
     if total == 0:
         return StageEvidence(spec, False, f"입력이 0건입니다({', '.join(source_keys)}).", counts)
@@ -614,26 +614,75 @@ def _user_memory_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     )
 
 
+def _final_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
+    """사용자가 받은 최종 타임라인. 코드·Timeline·Repair 를 다 거친 결과를 수집 원본과 대조한다."""
+    main = _step_by_name(trace_json, "main-agent")
+    final = resolve(trace_json, (main or {}).get("timelineRef"))
+    if not isinstance(final, dict):
+        final = (trace_json.get("result") or {}).get("timeline")
+    if not isinstance(final, dict):
+        return StageEvidence(spec, False, "최종 타임라인이 로그에 없습니다(실행 실패).")
+    source = trace_json.get("source") or {}
+    if not final.get("events") and not any(isinstance(value, list) and value for value in source.values()):
+        return StageEvidence(spec, False, "수집 원본과 최종 event 가 모두 0건입니다.")
+
+    timeline_step = _step_by_agent(trace_json, "timeline")
+    generation = next(iter(_generations_of(trace_json, timeline_step)), None)
+    user_prompt = _message_text(_messages(trace_json, (generation or {}).get("inputRef")), "user")
+    describe = _generation_by_name(trace_json, "describe-photo-images")
+    # 질문은 질문 단계에서 따로 잰다. 여기 남기면 문장 판정에 섞인다.
+    events = [{key: value for key, value in event.items() if key != "question"} for event in final.get("events") or []]
+
+    sections = (
+        EvidenceSection("실행 정보", "이 Task 가 언제·어떤 상태로 실행됐는지.", _header(trace_json, main)),
+        EvidenceSection("입력 수집 원본", "그날 수집된 원본 전부. 최종 event 를 이것과 대조한다.", source),
+        EvidenceSection(
+            "Vision 결과",
+            "사진마다 본 장면. 사진 근거 event 의 행동·장소를 이것과 대조한다.",
+            _messages(trace_json, describe.get("outputRef")) if describe else None,
+        ),
+        EvidenceSection(
+            "입력 User Memory",
+            "Timeline 프롬프트에 실린 User Memory. 생활 장소·호칭의 근거이지 사건의 근거는 아니다.",
+            prompt_section(user_prompt, "user memory"),
+        ),
+        EvidenceSection(
+            "출력 최종 타임라인",
+            "사용자가 받은 타임라인(질문 제외). v4 문장의 `{place}` 는 화면에서 그 event 의 장소로 채워진다.",
+            {"events": events, "warnings": final.get("warnings") or []},
+        ),
+    )
+    summary = {
+        "events": len(events),
+        "warnings": len(final.get("warnings") or []),
+        **{key: len(value) for key, value in source.items() if isinstance(value, list)},
+    }
+    return StageEvidence(spec, True, None, summary, sections, stage_usage(main))
+
+
 _BUILDERS = {
     "timeline": _timeline_evidence,
     "repair": _repair_evidence,
     "question": _question_evidence,
+    "final": _final_evidence,
     "user-memory": _user_memory_evidence,
 }
 
 
 def build(trace_json: dict, stage_key: str) -> StageEvidence:
-    """단계 하나의 채점 근거. 채점할 수 없으면 `applicable=False` 로 돌아온다."""
+    """단계 하나의 채점 근거. 채점할 수 없으면 `applicable=False` 로 돌아온다.
+
+    근거 요약에는 파이프라인 버전을 붙인다. 채점 기록에 남아 버전끼리 점수를 나눠 볼 수 있다.
+    """
     spec = stages.get(stage_key)
     trace_name = (trace_json.get("task") or {}).get("traceName")
     if trace_name and trace_name != spec.trace_name:
         return StageEvidence(
             spec, False, f"이 트레이스(`{trace_name}`)가 아니라 `{spec.trace_name}` 에서 채점하는 단계입니다."
         )
-    builder = _BUILDERS.get(stage_key)
-    if builder is not None:
-        return builder(trace_json, spec)
-    return _event_agent_evidence(trace_json, spec)
+    builder = _BUILDERS.get(stage_key) or _event_agent_evidence
+    built = builder(trace_json, spec)
+    return replace(built, summary=built.summary | {"pipelineVersion": pipeline_version(trace_json)})
 
 
 def build_all(trace_json: dict) -> list[StageEvidence]:

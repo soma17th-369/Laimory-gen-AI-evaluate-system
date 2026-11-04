@@ -14,7 +14,7 @@ from typing import Any
 
 import streamlit as st
 
-from app.analysis import rubric_store, stages
+from app.analysis import metric_doc, rubric_store, stages
 from app.ui import stage_view
 
 
@@ -64,7 +64,7 @@ def render() -> None:
 
     with st.expander("메트릭 문서 기본값 보기", expanded=False):
         st.caption(
-            "저장소의 기준 문서(`assets/rubrics/laimory-metric-v5.md`) 내용입니다. "
+            f"저장소의 기준 문서(`assets/rubrics/{metric_doc.DOCUMENT.name}`) 내용입니다. "
             "위 표를 고쳐도 이 문서는 바뀌지 않습니다."
         )
         stage_view.wrapped_table(

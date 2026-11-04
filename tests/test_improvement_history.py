@@ -215,7 +215,7 @@ class StageDeltaTests(unittest.TestCase):
         deltas = {delta.key: delta for delta in compare.stage_deltas(before, after)}
 
         self.assertEqual(list(deltas), ["timeline"])
-        self.assertEqual(deltas["timeline"].label, "Timeline Agent")
+        self.assertEqual(deltas["timeline"].label, "Timeline 초안")
         self.assertEqual(deltas["timeline"].diff, 40.0)
         self.assertIs(deltas["timeline"].improved, True)
         self.assertEqual(deltas["timeline"].unit, "/100")

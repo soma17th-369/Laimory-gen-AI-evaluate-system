@@ -59,7 +59,7 @@ class RubricEditTests(unittest.TestCase):
         prompt = stage_judge.system_prompt("question")
         self.assertIn("### `reflection` · 회고 질문다움 — 배점 40점", prompt)
         self.assertIn("사용자가 스스로 답을 쓰고 싶어지는가?", prompt)
-        self.assertNotIn("예·아니오만 요구하는 단답형", prompt)  # 문서 원문은 대체됐다
+        self.assertNotIn("어떤 event 에나 붙는 질문", prompt)  # 문서 원문은 대체됐다
 
     def test_result_schema_follows_the_edited_items(self) -> None:
         rows = [row for row in self._rows() if row["key"] != "uniqueness"]
@@ -100,7 +100,7 @@ class RubricEditTests(unittest.TestCase):
         rubric_store.reset("question")
 
         self.assertFalse(stages.is_edited("question"))
-        self.assertIn("예·아니오만 요구하는 단답형", stage_judge.system_prompt("question"))
+        self.assertIn("어떤 event 에나 붙는 질문", stage_judge.system_prompt("question"))
 
     def test_editing_one_stage_leaves_the_others_on_the_document(self) -> None:
         rubric_store.save("question", self._rows(reflection={"criteria": "- 바뀐 기준"}))

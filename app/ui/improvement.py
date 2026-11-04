@@ -27,8 +27,7 @@ from app.analysis.providers import (
 from app.collect.sync import parse_timestamp
 from app.improve import records
 from app.storage import store
-from app.storage.paths import evaluations_dir, improvement_file
-from app.storage.store import list_json, load_json
+from app.storage.paths import improvement_file
 from app.ui import env_filter
 
 _DEFAULT_INSTRUCTION = """다음은 여러 task 의 채점 문제점 모음이다. 공통·반복되는 문제를 묶고 우선순위를 매겨,
@@ -40,12 +39,7 @@ _DEFAULT_INSTRUCTION = """다음은 여러 task 의 채점 문제점 모음이�
 
 def _load_evaluations() -> list[dict]:
     """단계별 채점 결과만 모은다(구버전 단일 카드는 개선책 근거로 쓰지 않는다)."""
-    out = []
-    for path in list_json(evaluations_dir()):
-        data = load_json(path)
-        if isinstance(data, dict) and not evaluation_record.is_legacy(data):
-            out.append(data)
-    return out
+    return [record for _, record in evaluation_record.load_all() if not evaluation_record.is_legacy(record)]
 
 
 def _findings_block(evaluations: list[dict]) -> str:

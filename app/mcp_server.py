@@ -42,13 +42,12 @@ from app.tasks import jobs, review
 Env = Literal["dev", "prod"]
 TraceName = Literal["generate-timeline", "update-user-memory"]
 StageKey = Literal[
-    "event-location",
-    "event-calendar",
-    "event-notification",
     "event-photo",
+    "event-notification",
     "timeline",
     "repair",
     "question",
+    "final",
     "user-memory",
 ]
 
@@ -169,7 +168,8 @@ class Stage(BaseModel):
     label: str
     applicable: bool = Field(description="false 면 근거가 없어 채점하지 않는다")
     skipReason: str | None
-    evidence: dict[str, int | bool]
+    pipelineVersion: str | None = Field(description="그 실행의 대상 프롬프트 세트(v2·v3·v4). 가릴 수 없으면 null")
+    evidence: dict[str, int | bool | None]
     total: float | None = Field(description="100점 만점. null 은 0점이 아니라 미평가")
     judgedAt: str | None
     rubricRef: RubricRef | None
@@ -317,7 +317,8 @@ def _stage(item: StageEvidence, record: dict[str, Any] | None) -> Stage:
         label=item.stage.label,
         applicable=item.applicable,
         skipReason=item.skip_reason,
-        evidence=item.summary,
+        pipelineVersion=item.summary.get("pipelineVersion"),
+        evidence={key: value for key, value in item.summary.items() if key != "pipelineVersion"},
         total=card.get("total"),
         judgedAt=entry.get("judgedAt"),
         rubricRef=entry.get("rubricRef"),

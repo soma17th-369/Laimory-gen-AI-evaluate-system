@@ -17,12 +17,11 @@ import pandas as pd
 import streamlit as st
 
 from app import environments
+from app.analysis import evaluation_record
 from app.collect import generations
 from app.collect import sync as collect
 from app.collect.sync import parse_timestamp
 from app.improve import compare, records
-from app.storage import store
-from app.storage.paths import evaluations_dir
 from app.ui import env_filter
 
 _ROW_LIMIT = 50
@@ -31,12 +30,7 @@ _ROW_LIMIT = 50
 
 def _load_evaluations() -> dict[str, dict]:
     """taskId → 평가. 채점한 task 만 들어 있다."""
-    out: dict[str, dict] = {}
-    for path in store.list_json(evaluations_dir()):
-        data = store.load_json(path)
-        if isinstance(data, dict) and data.get("taskId"):
-            out[str(data["taskId"])] = data
-    return out
+    return {str(record["taskId"]): record for _, record in evaluation_record.load_all() if record.get("taskId")}
 
 
 def _fmt_time(value) -> str:
