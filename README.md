@@ -180,10 +180,10 @@ data/
 .venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 ```
 
-채점 기준의 정본은 [assets/rubrics/laimory-metric-v5.md](assets/rubrics/laimory-metric-v5.md)
-입니다. 평가 대상 8개(Location·Calendar·Notification·Photo Event Agent, Timeline, Repair,
-Question, User Memory)를 각각 100점으로 채점하고, 문서의 해당 절 원문이 그대로 채점 프롬프트가
-됩니다. 배점을 고치면 `app/analysis/stages.py` 도 같은 커밋에서 고쳐야 합니다(검사에 걸립니다).
+채점 기준의 정본은 [assets/rubrics/laimory-metric-v6.md](assets/rubrics/laimory-metric-v6.md)
+입니다. 평가 대상 7개(사진 해석, 알림 해석, Timeline 초안, Repair, 질문, 최종 타임라인,
+User Memory)를 각각 100점으로 채점하고, 문서의 해당 절 원문이 그대로 채점 프롬프트가 됩니다.
+대상 파이프라인의 프롬프트 세트(v1~v4)가 달라도 같은 기준으로 재므로 버전끼리 점수를 비교할 수 있습니다. 배점을 고치면 `app/analysis/stages.py` 도 같은 커밋에서 고쳐야 합니다(검사에 걸립니다).
 문서를 건드리지 않고 기준만 바꾸려면 **채점 기준 설정** 페이지에서 고칩니다(`data/rubrics/` 에
 저장되고 다음 채점부터 프롬프트에 반영됩니다).
 
