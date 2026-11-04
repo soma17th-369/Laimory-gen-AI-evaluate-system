@@ -60,8 +60,8 @@ get_job(jobId: string) -> Job
 type Env = "dev" | "prod"
 type TraceName = "generate-timeline" | "update-user-memory"
 type StageKey =
-  | "event-location" | "event-calendar" | "event-notification" | "event-photo"
-  | "timeline" | "repair" | "question" | "user-memory"
+  | "event-photo" | "event-notification"
+  | "timeline" | "repair" | "question" | "final" | "user-memory"
 
 type Log = {
   env: Env
@@ -90,7 +90,8 @@ type Stage = {
   label: string
   applicable: boolean         // false 면 근거가 없어 채점하지 않는다
   skipReason: string | null
-  evidence: Record<string, number | boolean>
+  pipelineVersion: string | null  // 대상 프롬프트 세트(v1~v4). 가릴 수 없으면 null
+  evidence: Record<string, number | boolean | null>
   total: number | null        // 100점 만점. null 은 0점이 아니라 미평가
   judgedAt: string | null
   rubricRef: { name: string; version: number } | null

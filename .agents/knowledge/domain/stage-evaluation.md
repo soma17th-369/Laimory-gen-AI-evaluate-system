@@ -1,23 +1,33 @@
 # 단계별 채점 (계약)
 
-Task 하나를 **평가 대상(Agent) 8개**로 나눠 각각 100점으로 채점한다. 채점 기준의 정본은
-[assets/rubrics/laimory-metric-v5.md](../../../assets/rubrics/laimory-metric-v5.md) 이고, 코드는 그
+Task 하나를 **평가 대상 7개**로 나눠 각각 100점으로 채점한다. 채점 기준의 정본은
+[assets/rubrics/laimory-metric-v6.md](../../../assets/rubrics/laimory-metric-v6.md) 이고, 코드는 그
 문서를 자르고 배점을 고정할 뿐 기준 문장을 따로 들고 있지 않다.
+
+v6 는 대상 파이프라인의 **프롬프트 세트(v1~v4)가 달라도 같은 기준**으로 잰다. 버전끼리 점수를
+비교하기 위해서다. 그래서 기준은 결과 품질과 모든 버전 공통 규칙만 담고, 버전마다 다른 방식(출력 모양,
+제목 끝 모양, 장소 표기, eventType 목록 등)은 문서의 「버전마다 다른 방식」 표에 모아 채점하지 않는다.
 
 ## 평가 대상과 근거 위치
 
-| stageKey | 대상 | 트레이스 | 입력 근거 | 출력 근거 |
+| stageKey | 대상 | 트레이스 | v2·v3 근거 | v4 근거 |
 | --- | --- | --- | --- | --- |
-| `event-location` | Location Event Agent | `generate-timeline` | `source.stays` · `source.movements` | `event-agent-location.output.result` |
-| `event-calendar` | Calendar Event Agent | `generate-timeline` | `source.calendars` | `event-agent-calendar.output.result` |
-| `event-notification` | Notification Event Agent | `generate-timeline` | `source.notifications` | `event-agent-notification.output.result` |
-| `event-photo` | Photo Event Agent | `generate-timeline` | `source.photos` + `describe-photo-images` 출력(vision) | `event-agent-photo.output.result` |
-| `timeline` | Timeline Agent | `generate-timeline` | `merge-event-results.output.mergedResult` · `source.*` · 프롬프트의 `[user memory]` | `timeline-agent` 의 `timelineRef` |
-| `repair` | Repair Agent | `generate-timeline` | 수정 전 draft · 근거 원본 · 회차별 `plan`·도구 실행 | `repair-agent` 의 `timelineRef` |
-| `question` | Question Agent | `generate-timeline` | 프롬프트의 `[events]`(timeOfDay 포함)·`[user memory]` | `question-agent` 결과의 `events[].question` |
-| `user-memory` | User Memory Agent | `update-user-memory` | `update-user-memory-profile` 프롬프트의 `[existing user memory]`·`[dailyTimelines]` | 같은 GENERATION 의 출력 프로필 |
+| `event-photo` | 사진 해석 | `generate-timeline` | `source.photos` + Vision 결과 → `event-agent-photo.output.result` | 같은 입력 → `clue-agent-photo.output.clues` |
+| `event-notification` | 알림 해석 | `generate-timeline` | `source.notifications` → `event-agent-notification.output.result` | 같은 입력 → `clue-agent-notification.output.clues` |
+| `timeline` | Timeline 초안 | `generate-timeline` | `merge-event-results.output.mergedResult` · `source.*` · 프롬프트의 `[user memory]` → `timeline-agent` 의 `timelineRef` | 프롬프트의 `[하루]`·`[근거 묶음]`·`[빈 시간]`·`[알림]` · `source.*` · `[user memory]` → 같음 |
+| `repair` | Repair | `generate-timeline` | 첫 확정본(`confirm-timeline-draft` phase `initial`) · 근거 원본 · 회차별 `plan`·도구 실행 → `repair-agent` 의 `timelineRef` | 같음(앞 단계 결과는 단서) |
+| `question` | 질문 | `generate-timeline` | 프롬프트의 `[events]`(timeOfDay 포함)·`[user memory]` → `question-agent` 결과의 `events[].question` | 같음 |
+| `final` | 최종 타임라인 | `generate-timeline` | `source.*` · Vision 결과 · `[user memory]` → `main-agent` 의 `timelineRef`(질문 제외) | 같음 |
+| `user-memory` | User Memory | `update-user-memory` | `update-user-memory-profile` 프롬프트의 `[existing user memory]`·`[dailyTimelines]` → 같은 GENERATION 의 출력 | 같음 |
 
-Sleep/Activity Agent 는 문서에서 deprecated 라 대상이 아니다.
+- 위치·일정은 단계로 두지 않는다. v4 는 LLM 이 아니라 코드가 만들어 버전을 가로질러 같은 자로 잴 수 없다.
+  그 결과는 `final` 이 사용자가 받은 타임라인으로 함께 본다. Sleep/Activity Agent 는 deprecated 라 대상이 아니다.
+- **파이프라인 버전은 흔적으로 가린다**(→ `evidence.pipeline_version`). 트레이스에 버전 표기가 없다. 단서 호출
+  (`metadata.sourceStage == "clue"`)이나 `build-clue-bundles` 가 있으면 v4, 아니면 초안 프롬프트에만 있는 절 제목으로
+  v1(`## 핵심 판단 원칙`)·v2(`결과 문장의 말투`, 첫 판은 `## 근거 우선순위와 융합 강령`)·v3(`1단계. 하루의 구조 파악`)를 가른다. User Memory 는 `### 장소 이름`(v4)·`` `changes` ``(v3)로 가른다.
+  결과는 근거의 `실행 정보.pipelineVersion` 과 채점 기록에 남는다.
+- **잘린 입력도 읽는다.** 64KB 를 넘는 GENERATION 입력은 LangFuse 에 `body.contentPreview` 로 앞부분만 남는다.
+  남은 messages 를 되살려 쓰고(`recover_messages`), 잘린 자리는 근거에 표시한다.
 
 ## 불변식
 
@@ -37,6 +47,8 @@ Sleep/Activity Agent 는 문서에서 deprecated 라 대상이 아니다.
   실패한다. `reason` 은 빈 값을 허용하지 않는다(만점이어도 확인한 내용을 적는다).
 - **총점은 코드가 계산한다.** `applied=false` 항목의 배점은 나머지에 비례 배분하고
   `Σscore / Σ배점 × 100` 으로 정규화한다. 그래서 항목별 점수의 합과 총점이 항상 맞는다.
+- **같은 기준, 같은 단계 구성.** 버전마다 근거를 꺼내는 자리만 다르고 항목·배점은 같다. 그래야 종합
+  점수(단계 평균)를 버전끼리 비교할 수 있다.
 - **근거가 없으면 0점이 아니라 N/A.** 해당 source 가 0건이거나 단계가 실행되지 않았으면 채점하지
   않고 사유만 남긴다. 종합 평균에서도 빠진다.
 - **종합 스코어 = 채점된 대상들의 단순 평균**(문서 규칙).
@@ -78,6 +90,9 @@ Sleep/Activity Agent 는 문서에서 deprecated 라 대상이 아니다.
   않는다.** 채점 자체의 비용은 남기지 않는다.
 - `schemaVersion` 이 없는 예전 레코드(7기준 0~10점 단일 카드)는 **읽기 전용**이다. 목록에서
   `구버전` 으로 표시하고, 비교할 때만 ×10 해서 100점 기준으로 환산한다.
+- 단계 결과마다 채점 기준 버전(`metric`)과 파이프라인 버전(`pipelineVersion`)을 남긴다. 기준이 바뀌면 이전
+  기준 결과는 읽을 때 `previousMetric` 으로 옮겨 보이고 종합에서 빠진다(→ `evaluation_record.current_view`).
+  기준이 다른 점수를 한 평균에 섞지 않기 위해서다. 새 기준으로 다시 채점하면 파일에도 그렇게 저장된다.
 - 채점 항목 편집본: `data/rubrics/<stageKey>.json`. 파일이 없으면 메트릭 문서 기본값을 쓴다.
 - 채점에 실제로 쓴 기준 본문: `judge-stage-<stageKey>` 이름으로 프롬프트 레지스트리에 기록된다
   (어떤 기준으로 매긴 점수인지 되짚기 위한 기록이지, 기준의 정본은 아니다).

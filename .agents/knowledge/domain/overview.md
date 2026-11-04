@@ -32,9 +32,10 @@ Laimory 의 생성형 AI가 남긴 실행 로그를 분석해 **품질을 측정
   않고 빈 임시 디렉터리에서 도구 없이 독립 실행하고, 구조화 기능은 해당 Pydantic JSON Schema로
   결과를 제한한 뒤 다시 검증한다. OpenAI API 구현은 명시적으로만 선택하는 deprecated 호환
   provider다. provider 사이에 자동 fallback은 없다.
-- **확정**: 채점은 **평가 대상(Agent) 8개를 각각 100점**으로 매기는 단계별 LLM-as-a-Judge다
-  (Location·Calendar·Notification·Photo Event Agent, Timeline, Repair, Question, User Memory).
-  채점 기준의 정본은 저장소에 둔 메트릭 문서(`assets/rubrics/laimory-metric-v5.md`)이고, 단계마다
+- **확정**: 채점은 **평가 대상 7개를 각각 100점**으로 매기는 단계별 LLM-as-a-Judge다
+  (사진 해석, 알림 해석, Timeline 초안, Repair, 질문, 최종 타임라인, User Memory). 대상 파이프라인의
+  프롬프트 세트(v1~v4)가 달라도 같은 기준으로 잰다.
+  채점 기준의 정본은 저장소에 둔 메트릭 문서(`assets/rubrics/laimory-metric-v6.md`)이고, 단계마다
   그 문서의 해당 절 원문이 그대로 프롬프트가 된다. 종합 스코어는 채점된 대상들의 단순 평균이다.
   자세한 계약은 [단계별 채점](stage-evaluation.md) 을 참고한다.
 - **확정**: 에이전트는 로컬 **MCP 서버**(`app/mcp_server.py`, stdio)로 수집·선택·채점을 호출한다.
