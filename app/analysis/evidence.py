@@ -33,7 +33,14 @@ _EVENT_AGENTS = {
 }
 """stageKey → (metadata.agent 값, 그 단계가 실제로 담당하는 source 배열)."""
 
-_PROMPT_SECTION = re.compile(r"^\[(?P<name>[A-Za-z][A-Za-z0-9 _-]*)\][ \t]*$", re.MULTILINE)
+# v4 Timeline 프롬프트는 칸 이름이 한글이다(`[하루]`·`[근거 묶음]`·`[빈 시간]`·`[알림]`).
+_PROMPT_SECTION = re.compile(r"^\[(?P<name>[A-Za-z가-힣][A-Za-z0-9가-힣 _-]*)\][ \t]*$", re.MULTILINE)
+
+V4_TIMELINE_INPUTS = ("하루", "근거 묶음", "빈 시간", "알림")
+"""v4 Timeline 이 읽는 근거 칸. 코드가 만든 위치 뼈대·기본 event 와 사진·알림·일정 단서가 여기 있다."""
+
+TRUNCATED_NOTE = "…(로그에서 잘림. 이 뒤의 입력은 근거에 없다)"
+"""64KB 를 넘는 입력은 LangFuse 에 앞부분만 남는다. 잘린 자리를 근거에 그대로 표시한다."""
 
 
 @dataclass(frozen=True)
@@ -96,13 +103,110 @@ def _generations_of(trace_json: dict, step: dict | None) -> list[dict]:
     return [gen for gen in _generations(trace_json) if gen.get("id") in ids]
 
 
+def _is_clue_step(step: dict | None) -> bool:
+    """v4 의 사진·알림 단서 호출인지. v2·v3 의 Event Agent 는 `sourceStage: event` 다."""
+    return ((step or {}).get("metadata") or {}).get("sourceStage") == "clue"
+
+
+def pipeline_version(trace_json: dict) -> str | None:
+    """대상 파이프라인 프롬프트 세트(v1~v4). 트레이스에 버전 표기가 없어 흔적으로 가린다.
+
+    - v4: 사진·알림 단서 호출(`sourceStage: clue`)이나 `build-clue-bundles` 가 있다.
+    - v1·v2·v3: 초안 프롬프트 첫머리가 같다. 각자에만 있는 절 제목으로 가린다. 입력이 잘려 와도 앞부분에 있다.
+    - User Memory: v4 는 `### 장소 이름` 절, v3 는 변경 목록(`changes`), 둘 다 없으면 v2.
+    가릴 수 없으면 None.
+    """
+    if any(_is_clue_step(step) for step in _steps(trace_json)) or _step_by_name(trace_json, "build-clue-bundles"):
+        return "v4"
+    draft = _generation_by_name(trace_json, "generate-timeline-draft")
+    if draft is not None:
+        text = _system_text(trace_json, draft)
+        if "# Timeline 시스템 프롬프트" in text:
+            return "v4"
+        if "1단계. 하루의 구조 파악" in text:
+            return "v3"
+        # v2 첫 판(08-03)에는 말투 절이 없고 융합 강령 절이 있다.
+        if "결과 문장의 말투" in text or "## 근거 우선순위와 융합 강령" in text:
+            return "v2"
+        if "## 핵심 판단 원칙" in text:
+            return "v1"
+        return None
+    memory = _generation_by_name(trace_json, "update-user-memory-profile")
+    if memory is not None:
+        text = _system_text(trace_json, memory)
+        if not text:
+            return None
+        if "### 장소 이름" in text:
+            return "v4"
+        return "v3" if "`changes`" in text else "v2"
+    return None
+
+
+def _system_text(trace_json: dict, generation: dict) -> str:
+    return _message_text(_messages(trace_json, generation.get("inputRef")), "system") or ""
+
+
 def _messages(trace_json: dict, ref: str | None) -> Any:
     """GENERATION 의 프롬프트·출력. messages 리스트면 그대로, 그 외 형태도 원문 그대로 둔다."""
     return resolve(trace_json, ref)
 
 
+def _truncated_preview(payload: Any) -> str | None:
+    """입력이 잘려 온 GENERATION 이면 남은 앞부분(messages JSON 문자열)을 준다."""
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if isinstance(body, dict) and body.get("truncated") and isinstance(body.get("contentPreview"), str):
+        return body["contentPreview"]
+    return None
+
+
+def _partial_json_string(text: str) -> str:
+    """끝이 잘린 JSON 문자열 본문을 읽을 수 있는 데까지 푼다(여는 따옴표 다음부터 받는다)."""
+    decoder = json.JSONDecoder()
+    # 잘린 자리가 escape 한가운데일 수 있어 끝을 조금씩 덜어내며 닫아 본다.
+    for cut in range(len(text), max(len(text) - 8, 0) - 1, -1):
+        try:
+            value, _ = decoder.raw_decode('"' + text[:cut] + '"')
+            return value
+        except ValueError:
+            continue
+    return ""
+
+
+def recover_messages(preview: str) -> list[dict]:
+    """잘린 messages JSON 에서 읽을 수 있는 message 를 되살린다. 마지막 것은 `truncated` 가 붙는다.
+
+    로그는 `[{"content": "…", "role": "system"}, {"content": "…", "role": "user"}]` 꼴이다. role 이 content
+    뒤에 오므로 잘린 message 는 role 을 모른다. 그때는 순서로 정한다(system 다음이 user).
+    """
+    decoder = json.JSONDecoder()
+    messages: list[dict] = []
+    position = 0
+    while True:
+        found = re.compile(r'"content"\s*:\s*"').search(preview, position)
+        if found is None:
+            break
+        start = found.end() - 1
+        try:
+            content, end = decoder.raw_decode(preview, start)
+        except ValueError:
+            content = _partial_json_string(preview[start + 1 :])
+            role = "system" if not messages else "user"
+            messages.append({"role": role, "content": content, "truncated": True})
+            break
+        role = re.match(r'\s*,\s*"role"\s*:\s*"(?P<role>\w+)"', preview[end:])
+        messages.append({"role": role.group("role") if role else ("system" if not messages else "user"), "content": content})
+        position = end
+    return messages
+
+
 def _message_text(payload: Any, role: str) -> str | None:
-    """messages 에서 특정 role 의 content 를 꺼낸다."""
+    """messages 에서 특정 role 의 content 를 꺼낸다. 잘린 입력은 남은 앞부분에서 꺼낸다."""
+    preview = _truncated_preview(payload)
+    if preview is not None:
+        for message in recover_messages(preview):
+            if message["role"] == role:
+                return message["content"] + ("\n" + TRUNCATED_NOTE if message.get("truncated") else "")
+        return None
     if not isinstance(payload, list):
         return None
     for message in payload:
@@ -168,6 +272,7 @@ def _header(trace_json: dict, step: dict | None) -> dict:
         "timezone": source.get("timezone"),
         "window": task.get("window"),
         "traceStatus": (trace_json.get("operation") or {}).get("status"),
+        "pipelineVersion": pipeline_version(trace_json),
     }
     if step is not None:
         header["stageLevel"] = step.get("level")
@@ -179,13 +284,13 @@ def _prompt_sections(trace_json: dict, generation: dict | None, label: str) -> l
     """그 단계가 실제로 받은 지시. 무엇을 지시받고 그렇게 했는지 판단할 때 쓴다."""
     if generation is None:
         return []
-    return [
-        EvidenceSection(
-            title=f"{label} 프롬프트",
-            note="대상 서버가 이 단계에 실제로 준 지시(system·user). 채점 기준이 아니라 참고 근거다.",
-            payload=_messages(trace_json, generation.get("inputRef")),
-        )
-    ]
+    payload = _messages(trace_json, generation.get("inputRef"))
+    note = "대상 서버가 이 단계에 실제로 준 지시(system·user). 채점 기준이 아니라 참고 근거다."
+    preview = _truncated_preview(payload)
+    if preview is not None:
+        payload = recover_messages(preview)
+        note += " 로그에서 잘려 앞부분만 남았다(`truncated`)."
+    return [EvidenceSection(title=f"{label} 프롬프트", note=note, payload=payload)]
 
 
 def _event_agent_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
@@ -196,11 +301,24 @@ def _event_agent_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     total = sum(counts.values())
 
     if step is None:
+        if pipeline_version(trace_json) == "v4":
+            return StageEvidence(spec, False, "v4 는 이 source 를 LLM 이 아니라 코드로 처리합니다.", counts)
         return StageEvidence(spec, False, f"{spec.label} 관측치가 트레이스에 없습니다.", counts)
     if total == 0:
         return StageEvidence(spec, False, f"입력이 0건입니다({', '.join(source_keys)}).", counts)
 
-    result = (step.get("output") or {}).get("result") or {}
+    output = step.get("output") or {}
+    if _is_clue_step(step):
+        # v4 단서 호출은 candidate·fragment 대신 단서 목록을 낸다. warning 본문은 로그에 개수만 남는다.
+        produced = {"clues": output.get("clues") or []}
+        produced_title, produced_note = "출력 단서", "이 단계가 만든 것 전부(v4 단서). warning 은 개수만 로그에 남는다."
+        produced_summary = {"clues": len(produced["clues"]), "warnings": output.get("warningCount")}
+    else:
+        result = output.get("result") or {}
+        produced = {key: result.get(key) or [] for key in ("candidates", "fragments", "warnings")}
+        produced_title, produced_note = "출력 candidate·fragment·warning", "이 단계가 만든 것 전부."
+        produced_summary = {key: len(value) for key, value in produced.items()}
+
     sections = [
         EvidenceSection("실행 정보", "이 단계가 언제·어떤 상태로 실행됐는지.", _header(trace_json, step)),
         EvidenceSection(
@@ -220,25 +338,19 @@ def _event_agent_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
             )
         )
 
-    sections.append(
-        EvidenceSection(
-            "출력 candidate·fragment·warning",
-            "이 단계가 만든 것 전부.",
-            {
-                "candidates": result.get("candidates") or [],
-                "fragments": result.get("fragments") or [],
-                "warnings": result.get("warnings") or [],
-            },
-        )
-    )
-    sections.extend(_prompt_sections(trace_json, next(iter(_generations_of(trace_json, step)), None), spec.label))
+    sections.append(EvidenceSection(produced_title, produced_note, produced))
+    sections.extend(_prompt_sections(trace_json, _interpretation_generation(trace_json, step), spec.label))
 
-    summary = counts | {
-        "candidates": len(result.get("candidates") or []),
-        "fragments": len(result.get("fragments") or []),
-        "warnings": len(result.get("warnings") or []),
-    }
+    summary = counts | produced_summary
     return StageEvidence(spec, True, None, summary, tuple(sections), stage_usage(step))
+
+
+def _interpretation_generation(trace_json: dict, step: dict) -> dict | None:
+    """그 단계의 해석 호출(`infer-<source>-events`). 사진은 Vision 묘사 호출이 같은 단계 아래에 먼저 온다."""
+    generations = _generations_of(trace_json, step)
+    return next((gen for gen in generations if gen.get("name") != "describe-photo-images"), None) or next(
+        iter(generations), None
+    )
 
 
 def _timeline_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
@@ -249,14 +361,23 @@ def _timeline_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     if not isinstance(draft, dict):
         return StageEvidence(spec, False, "Timeline Agent 가 draft 를 만들지 못했습니다(실행 실패).")
 
-    merge = _step_by_name(trace_json, "merge-event-results")
-    merged = (merge or {}).get("output", {}).get("mergedResult") or {}
     generation = next(iter(_generations_of(trace_json, step)), None)
     user_prompt = _message_text(_messages(trace_json, (generation or {}).get("inputRef")), "user")
 
-    sections = (
-        EvidenceSection("실행 정보", "이 단계가 언제·어떤 상태로 실행됐는지.", _header(trace_json, step)),
-        EvidenceSection(
+    if pipeline_version(trace_json) == "v4":
+        # v4 는 Event Agent 결과를 합치지 않는다. 코드가 만든 위치 뼈대·기본 event 와 단서 묶음이
+        # 프롬프트 칸으로만 들어가므로 그 칸을 원문 그대로 넣는다.
+        clue_inputs = {name: prompt_section(user_prompt, name) for name in V4_TIMELINE_INPUTS}
+        given = EvidenceSection(
+            "입력 근거 묶음",
+            "코드가 만든 하루 뼈대·기본 event 와 사진·알림·일정 단서(v4). Timeline 이 받은 근거의 전부다.",
+            clue_inputs if any(clue_inputs.values()) else None,
+        )
+        given_summary = {name: bool(body) for name, body in clue_inputs.items()}
+    else:
+        merge = _step_by_name(trace_json, "merge-event-results")
+        merged = (merge or {}).get("output", {}).get("mergedResult") or {}
+        given = EvidenceSection(
             "입력 candidate·fragment",
             "Event Agent 들이 넘긴 근거. Timeline 은 candidate 를 우선 쓰고 fragment 로 보충해야 한다.",
             {
@@ -264,7 +385,15 @@ def _timeline_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
                 "fragments": merged.get("fragments") or [],
                 "warnings": merged.get("warnings") or [],
             },
-        ),
+        )
+        given_summary = {
+            "candidates": len(merged.get("candidates") or []),
+            "fragments": len(merged.get("fragments") or []),
+        }
+
+    sections = (
+        EvidenceSection("실행 정보", "이 단계가 언제·어떤 상태로 실행됐는지.", _header(trace_json, step)),
+        given,
         EvidenceSection(
             "입력 수집 원본",
             "candidate 의 rawId 를 대조할 원본. 없는 사실을 만들었는지 여기서 확인한다.",
@@ -278,9 +407,7 @@ def _timeline_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
         EvidenceSection("출력 draft timeline", "이 단계가 만든 타임라인 초안 전부(events·warnings).", draft),
         *_prompt_sections(trace_json, generation, spec.label),
     )
-    summary = {
-        "candidates": len(merged.get("candidates") or []),
-        "fragments": len(merged.get("fragments") or []),
+    summary = given_summary | {
         "events": len(draft.get("events") or []),
         "warnings": len(draft.get("warnings") or []),
     }
@@ -325,6 +452,21 @@ def _repair_iterations(trace_json: dict) -> list[dict]:
     return [by_iteration[key] for key in sorted(by_iteration, key=lambda value: (value is None, value))]
 
 
+def _first_repair_generation(trace_json: dict) -> dict | None:
+    """1회차 분석 호출. 로그의 GENERATION 순서는 실행 순서가 아니라서 1회차 단계에 묶인 것을 찾는다."""
+    first = next(
+        (
+            step
+            for step in _steps(trace_json)
+            if step.get("name") == "analyze-repair-iteration" and (step.get("metadata") or {}).get("iteration") == 1
+        ),
+        None,
+    )
+    return next(iter(_generations_of(trace_json, first)), None) or _generation_by_name(
+        trace_json, "analyze-timeline-repair"
+    )
+
+
 def _repair_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     step = _step_by_agent(trace_json, "repair")
     if step is None:
@@ -333,13 +475,28 @@ def _repair_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
     if not any(entry.get("plan") for entry in iterations):
         return StageEvidence(spec, False, "Repair 반복이 한 번도 실행되지 않았습니다.")
 
+    # Repair 가 받는 것은 Timeline 출력이 아니라 코드가 한 번 확정한 draft 다(Repair 는 시작할 때
+    # 확정을 먼저 돌린다). 첫 확정 기록이 없는 예전 로그만 Timeline 출력으로 대신한다.
+    initial = next(
+        (
+            candidate
+            for candidate in _steps(trace_json)
+            if candidate.get("name") == "confirm-timeline-draft"
+            and (candidate.get("metadata") or {}).get("phase") == "initial"
+        ),
+        None,
+    )
     timeline_step = _step_by_agent(trace_json, "timeline")
-    before = resolve(trace_json, (timeline_step or {}).get("timelineRef"))
+    before = resolve(trace_json, (initial or timeline_step or {}).get("timelineRef"))
     after = resolve(trace_json, step.get("timelineRef"))
     event_results = {
-        (candidate.get("metadata") or {}).get("agent"): (candidate.get("output") or {}).get("result")
+        (candidate.get("metadata") or {}).get("agent"): (
+            (candidate.get("output") or {}).get("clues")
+            if _is_clue_step(candidate)
+            else (candidate.get("output") or {}).get("result")
+        )
         for candidate in _steps(trace_json)
-        if (candidate.get("metadata") or {}).get("sourceStage") == "event"
+        if (candidate.get("metadata") or {}).get("sourceStage") in ("event", "clue")
     }
     # 회차 종료본은 참조만 두면 화면에서 못 보므로, 회차별로 event 요약만 펼친다(전문 중복 방지).
     for entry in iterations:
@@ -357,10 +514,14 @@ def _repair_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
 
     sections = (
         EvidenceSection("실행 정보", "이 단계가 언제·어떤 상태로 실행됐는지.", _header(trace_json, step)),
-        EvidenceSection("수정 전 draft", "Repair 가 받은 타임라인. 문제 발견의 대상이다.", before),
+        EvidenceSection(
+            "수정 전 draft",
+            "Repair 가 실제로 받은 타임라인(Timeline 출력을 코드가 한 번 확정한 것). 문제 발견의 대상이다.",
+            before,
+        ),
         EvidenceSection(
             "근거 원본",
-            "draft 주장을 검증할 수집 원본과 Agent 결과. lookup_source 없이 고칠 수 있었는지 여기서 본다.",
+            "draft 주장을 검증할 수집 원본과 앞 단계 결과(v2·v3 는 Event Agent 결과, v4 는 사진·알림 단서).",
             {"source": trace_json.get("source") or {}, "eventResults": event_results},
         ),
         EvidenceSection(
@@ -369,9 +530,7 @@ def _repair_evidence(trace_json: dict, spec: StageSpec) -> StageEvidence:
             iterations,
         ),
         EvidenceSection("수정 후 timeline", "Repair 가 끝내고 넘긴 타임라인 전부.", after),
-        *_prompt_sections(
-            trace_json, _generation_by_name(trace_json, "analyze-timeline-repair"), "Repair analyze"
-        ),
+        *_prompt_sections(trace_json, _first_repair_generation(trace_json), "Repair analyze"),
     )
     summary = {
         "iterations": len(iterations),
