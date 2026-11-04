@@ -10,6 +10,7 @@ Task 하나에 파일 하나다. 단계별로 따로 채점하므로 **한 단�
   "composite": {"score": 84.6, "stageScores": {…}, "skipped": {…}},
   "stages": {
     "timeline": {
+      "metric": "v6", "pipelineVersion": "v4",
       "rubricRef": {"name": "judge-stage-timeline", "version": 1},
       "judgedAt": "…", "evidence": {"summary": {…}, "sections": ["실행 정보", …]},
       "scorecard": {"total": 78.0, "items": [...], "deductions": [...], "alerts": [...]}
@@ -22,6 +23,10 @@ Task 하나에 파일 하나다. 단계별로 따로 채점하므로 **한 단�
 다시 만들어 보여준다(같은 근거를 두 곳에 두면 어긋난다).
 
 `schemaVersion` 이 없는 예전 레코드(7기준 0~10점 단일 카드)는 **읽기 전용**으로만 다룬다.
+
+단계 결과마다 그때의 채점 기준 버전(`metric`)이 붙는다. 기준을 바꾸면 이전 기준으로 매긴 단계는
+`previousMetric` 으로 옮겨 보이고(→ [current_view][app.analysis.evaluation_record.current_view]) 종합에서
+빠진다. 기준이 다른 점수를 한 평균에 섞지 않기 위해서다. 새 기준으로 다시 채점하면 파일에도 그렇게 저장된다.
 
 이 파일은 **최신 상태**만 들고 있다. 같은 단계를 여러 번 채점하면 실행마다 한 줄씩
 `data/evaluations/history/<taskId>.jsonl` 에 쌓인다(→ [append_history][app.analysis.evaluation_record.append_history]).
@@ -36,7 +41,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.analysis import rubric_store, stage_schema
+from app.analysis import metric_doc, rubric_store, stage_schema
 from app.analysis.stage_schema import StageScore
 from app.storage import store
 from app.storage.paths import (
@@ -63,9 +68,32 @@ def is_legacy(record: dict[str, Any]) -> bool:
     return int(record.get("schemaVersion") or 1) < SCHEMA_VERSION
 
 
+def is_current(entry: Any) -> bool:
+    """단계 결과가 지금 채점 기준으로 매긴 것인지."""
+    return isinstance(entry, dict) and entry.get("metric") == metric_doc.METRIC_VERSION
+
+
+def current_view(record: dict[str, Any]) -> dict[str, Any]:
+    """지금 기준이 아닌 단계 결과를 `previousMetric` 으로 옮기고 종합을 다시 계산한 사본.
+
+    파일은 바꾸지 않는다. 다시 채점하기 전까지는 이전 기준 결과가 `previousMetric` 에 보존된다.
+    """
+    if is_legacy(record):
+        return record
+    entries = record.get("stages") or {}
+    stale = {key: entry for key, entry in entries.items() if not is_current(entry)}
+    if not stale:
+        return record
+    view = dict(record)
+    view["stages"] = {key: entry for key, entry in entries.items() if is_current(entry)}
+    view["previousMetric"] = {**(record.get("previousMetric") or {}), **stale}
+    view["composite"] = _recompute_composite(view)
+    return view
+
+
 def load(task_id: str) -> dict[str, Any] | None:
     data = store.load_json(evaluation_file(task_id))
-    return data if isinstance(data, dict) else None
+    return current_view(data) if isinstance(data, dict) else None
 
 
 def load_all() -> list[tuple[Path, dict[str, Any]]]:
@@ -74,7 +102,7 @@ def load_all() -> list[tuple[Path, dict[str, Any]]]:
     for path in store.list_json(evaluations_dir()):
         data = store.load_json(path)
         if isinstance(data, dict):
-            records.append((path, data))
+            records.append((path, current_view(data)))
     return sorted(records, key=lambda item: item[0].stat().st_mtime, reverse=True)
 
 
@@ -127,7 +155,7 @@ def save_stages(
             if current is not None:
                 record["legacy"] = current
         else:
-            record = dict(current)
+            record = current_view(dict(current))
             record.setdefault("stages", {})
 
         record.update(
@@ -142,7 +170,10 @@ def save_stages(
             }
         )
         for key, score in results.items():
+            summary = (evidence_summaries.get(key) or {}).get("summary") or {}
             record["stages"][key] = {
+                "metric": metric_doc.METRIC_VERSION,
+                "pipelineVersion": summary.get("pipelineVersion"),
                 "rubricRef": rubric_refs.get(key),
                 "judgedAt": now_iso(),
                 "evidence": evidence_summaries.get(key) or {},
@@ -199,6 +230,7 @@ def append_history(
                         "traceName": trace_name,
                         "date": date,
                         "stageKey": key,
+                        "metric": metric_doc.METRIC_VERSION,
                         "label": score.label,
                         "total": score.total,
                         "rubricRef": rubric_refs.get(key),

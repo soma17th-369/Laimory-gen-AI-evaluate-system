@@ -1,11 +1,11 @@
-"""메트릭 문서(`assets/rubrics/laimory-metric-v5.md`) 읽기·자르기.
+"""메트릭 문서(`assets/rubrics/laimory-metric-v6.md`) 읽기·자르기.
 
 채점 기준의 **정본은 문서**다. 코드가 기준 문장을 따로 들고 있지 않고, 이 모듈이 문서를
 heading 단위로 잘라 그대로 프롬프트에 넣는다. 문서를 고치면 채점 기준이 같이 바뀐다.
 
 자르는 단위는 heading 번호다(`1`, `1.1`, `2.3`, `5.5` …). `section()` 은 그 heading 과 **하위
-heading 전부**를 돌려주고, `intro()` 는 하위 heading 직전까지만 돌려준다(예: `## 1. Event Agent`
-의 안내 문장 한 줄).
+heading 전부**를 돌려주고, `intro()` 는 하위 heading 직전까지만 돌려준다(예: `## 3. Timeline 초안`
+의 근거 읽는 법).
 
 요약·발췌는 하지 않는다. 항목 문장이 한 줄이라도 빠지면 채점 기준이 달라지기 때문이다.
 누락 검사는 [app.analysis.stages][] 가 배점표와 대조해서 한다.
@@ -19,7 +19,10 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DOCUMENT = _PROJECT_ROOT / "assets" / "rubrics" / "laimory-metric-v5.md"
+METRIC_VERSION = "v6"
+"""채점 기준 문서의 버전. 채점 기록에 남겨, 기준이 바뀐 뒤의 점수와 섞이지 않게 한다."""
+
+DOCUMENT = _PROJECT_ROOT / "assets" / "rubrics" / f"laimory-metric-{METRIC_VERSION}.md"
 """메트릭 문서. 대상 서버 문서와 같은 취급으로 저장소에 원문을 둔다(`data/` 는 gitignore)."""
 
 _HEADING = re.compile(r"^(#{2,4})\s+(.*?)\s*$")
@@ -95,11 +98,6 @@ def preamble() -> str:
         len(lines),
     )
     return "\n".join(lines[:first_numbered]).strip()
-
-
-def score_format() -> str:
-    """점수 작성 형식(6장). 항목 합 = 총점 규칙이 여기 있다."""
-    return section("6")
 
 
 def split_by_markers(text: str, markers: list[str]) -> tuple[str, dict[str, str]]:
