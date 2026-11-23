@@ -16,10 +16,14 @@
 전역 유일이라 `id` 병합이 그대로 성립한다. 반면 **커서는 환경마다 따로**다 — "어디까지 훑었는지"
 는 프로젝트마다 다르고, 하나로 합치면 서로를 밀어내 양쪽 다 구멍이 생긴다.
 
-동기화는 항상 **timestamp 오름차순**으로 페이지를 훑는다. 오름차순이면 조회 중에 새 로그가
-들어와도 이미 본 페이지가 밀리지 않고, 중간에 멈춰도 `last_timestamp` 가 안전한 워터마크가
-되어 다음 실행이 그 지점부터 이어받는다. `from_timestamp` 는 경계 포함이라 마지막 트레이스를
-한 번 더 받지만 `id` 기준 병합이 중복을 흡수한다.
+동기화는 **시간 구간(하루)을 오래된 쪽부터** 차례로 훑는다. LangFuse v2 관측치 API 는 결과를
+최신순으로만 주므로(→ [app.langfuse_client][]) 페이지 순서로는 오름차순을 만들 수 없다. 구간 하나는
+통째로 받고 나서야 반영하므로, 중간에 멈춰도 `last_timestamp` 가 안전한 워터마크가 되어 다음 실행이
+그 지점부터 이어받는다.
+
+증분 수집은 커서보다 [LOOKBACK][app.collect.sync.LOOKBACK] 만큼 앞에서 시작한다. 트레이스는 끝나야
+루트 관측치가 올라오므로, 커서보다 먼저 시작했지만 늦게 끝난 트레이스를 놓치지 않으려는 것이다. 겹쳐
+받은 행은 `id` 기준 병합이 흡수한다.
 
 커서는 **이번 훑기에서 실제로 받은 행**의 최신 시각으로만 전진한다. 저장된 행 전체의 최대
 시각을 쓰면 안 된다 — 예전에 최신 구간만 담아둔 스냅샷이 남아 있는 상태에서 백필이 중간에
@@ -29,35 +33,80 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Sequence
 
 from app import environments
-from app.langfuse_client import list_traces, trace_summary
+from app.langfuse_client import has_traces, list_traces, trace_summary
 from app.storage import store
 from app.storage.paths import collection_file, collection_state_file
 
-PAGE_SIZE = 100
-"""한 번의 API 호출로 받는 트레이스 수(LangFuse 페이지 크기)."""
+WINDOW = timedelta(days=1)
+"""한 번에 받는 시간 구간. 개발 프로젝트는 하루에 테스트 트레이스가 수만 건이라 그 이상은 메모리에 무겁다."""
+
+LOOKBACK = timedelta(hours=1)
+"""증분 수집을 커서보다 이만큼 앞에서 시작한다. 타임라인 생성은 몇 분이면 끝나므로 넉넉하다."""
+
+HISTORY_START = datetime(2026, 7, 1, tzinfo=timezone.utc)
+"""전체 수집이 찾기 시작하는 시각. Laimory 의 LangFuse 기록(2026-07-30~)보다 앞선다. 실제 시작점은
+LangFuse 에 남아 있는 가장 오래된 날을 찾아 정한다."""
 
 SAVE_EVERY_PAGES = 20
-"""수집 도중 저장하는 간격. 호출 한도 때문에 긴 수집은 몇 시간씩 걸릴 수 있다. 프로세스가 강제로 끝나면
-예외 처리도 돌지 않으므로, 받은 만큼 중간중간 남겨 다음 실행이 그 지점부터 이어받게 한다."""
-
-LIST_FIELDS = "core,io,metrics"
-"""목록 조회에 필요한 필드 그룹만 받는다. taskId 는 ``io``(=trace.input), latency·total_cost 는
-``metrics`` 에서 온다. 관측치·스코어는 저장 스키마에 쓰지 않으므로 제외해 응답을 가볍게 한다."""
+"""수집 도중 저장하는 간격(구간 수). 긴 수집 도중 프로세스가 강제로 끝나면 예외 처리도 돌지 않으므로,
+받은 만큼 중간중간 남겨 다음 실행이 그 지점부터 이어받게 한다."""
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
 
 
+def _now() -> datetime:
+    """수집이 훑는 구간의 끝. 테스트가 바꿔 끼운다."""
+    return datetime.now(timezone.utc)
+
+
 def task_id_of(trace: Any) -> str | None:
-    """트레이스에서 도메인 taskId 를 뽑는다. LangFuse 는 이 값을 `trace.input` 에만 담는다."""
-    raw = getattr(trace, "input", None)
-    if not isinstance(raw, dict):
-        return None
-    value = raw.get("taskId") or (raw.get("request") or {}).get("taskId")
+    """트레이스에서 도메인 taskId 를 뽑는다. 대상 서버는 taskId 를 세션 id 로 남긴다(2026-09~).
+
+    세션이 없는 트레이스(대상 서버 테스트 조각)는 None 이다. 예전 목록은 입력(`trace.input`)에서
+    꺼냈지만, v2 에서 입력은 원본 데이터 전체라 목록 조회로 받지 않는다. 이미 저장된 행의 taskId 는
+    병합할 때 지킨다(→ [_merged][app.collect.sync._merged]).
+    """
+    value = getattr(trace, "session_id", None)
     return str(value) if value else None
+
+
+def _merged(current: dict[str, Any] | None, row: dict[str, Any]) -> dict[str, Any]:
+    """새로 받은 행에 저장본의 처음 시각·taskId 를 지켜 준다.
+
+    트레이스의 시작 시각과 taskId 는 바뀌지 않는다. 그런데 대상 서버 테스트가 옛 트레이스 id 를
+    재사용하면 구간마다 새 루트가 보여 시각이 뒤로 밀리고, 세션이 없는 루트는 taskId 를 주지 않는다.
+    """
+    if current is None:
+        return row
+    kept = dict(row)
+    before = parse_timestamp(current.get("timestamp"))
+    after = parse_timestamp(row.get("timestamp"))
+    if before is not None and (after is None or before < after):
+        kept["timestamp"] = current["timestamp"]
+    if not kept.get("taskId") and current.get("taskId"):
+        kept["taskId"] = current["taskId"]
+    return kept
+
+
+def _first_window(env: str, start: datetime, end: datetime, window: timedelta) -> datetime:
+    """`[start, end)` 에서 트레이스가 처음 나오는 구간의 시작. 없으면 `end`.
+
+    전체 수집이 빈 구간을 하나씩 부르지 않도록 구간 단위로 이분 탐색한다(호출 몇 번).
+    LangFuse 는 오래된 트레이스를 지우므로 실제 시작점은 [HISTORY_START][app.collect.sync.HISTORY_START]
+    보다 한참 뒤일 수 있다.
+    """
+    low, high = 0, max(0, -(-(end - start) // window))
+    while low < high:
+        middle = (low + high) // 2
+        if has_traces(from_timestamp=start, to_timestamp=min(start + (middle + 1) * window, end), env=env):
+            high = middle
+        else:
+            low = middle + 1
+    return min(start + low * window, end)
 
 
 def row_of(trace: Any, env: str) -> dict[str, Any]:
@@ -157,36 +206,37 @@ class SyncResult:
     """이번에 LangFuse 에서 받은 행 수(중복 포함)."""
 
     pages: int
+    """훑은 구간 수. 예전 목록 API 의 페이지 수 자리라 이름을 그대로 둔다(MCP 결과 형식)."""
+
     completed: bool
-    """마지막 페이지까지 갔으면 True. `max_pages` 로 끊겼으면 False."""
+    """지금 시각까지 다 훑었으면 True. `max_pages`·`should_stop` 으로 끊겼으면 False."""
 
 
 def sync(
     env: str,
     *,
     full: bool = False,
-    page_size: int = PAGE_SIZE,
+    window: timedelta = WINDOW,
     max_pages: int | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> SyncResult:
     """한 환경의 LangFuse 로그를 받아 공용 저장소에 병합한다.
 
-    커서가 없거나 `full` 이면 처음부터(=쌓인 로그 전체), 아니면 마지막으로 훑은 시각 이후만
-    받는다. 어느 쪽이든 기존에 저장된 행은 지우지 않으며, **다른 환경의 행도 건드리지 않는다.**
+    커서가 없거나 `full` 이면 처음부터(=LangFuse 에 남은 로그 전체), 아니면 마지막으로 훑은 시각
+    이후만 받는다. 어느 쪽이든 기존에 저장된 행은 지우지 않으며, **다른 환경의 행도 건드리지 않는다.**
 
-    `should_stop` 이 참이 되면 다음 페이지를 받지 않고 받은 만큼 저장한 뒤 끝낸다(`completed=False`).
+    `should_stop` 이 참이 되면 다음 구간을 받지 않고 받은 만큼 저장한 뒤 끝낸다(`completed=False`).
     """
     environment = environments.validate(env)
     state = load_state(environment)
     backfill = full or needs_backfill(state)
     cursor = None if backfill else parse_timestamp(state.get("last_timestamp"))
+    until = _now()
 
     merged = {row["id"]: row for row in _stored_rows() if row.get("id")}
     received: dict[str, dict[str, Any]] = {}
     added = updated = fetched = pages = 0
-    completed = False
-    page = 1
     watermark: datetime | None = None
 
     def persist() -> tuple[int, int]:
@@ -207,7 +257,8 @@ def sync(
 
             environment_total = len(rows_of(rows, environment))
             # 이번에 훑은 구간의 끝까지만 커서를 옮긴다(아무것도 못 받았으면 이전 커서 유지).
-            newest = watermark if watermark is not None else cursor
+            # 앞당겨 받은 구간(LOOKBACK)의 행만 받았을 때 커서가 뒤로 물러나지 않게 큰 쪽을 쓴다.
+            newest = max((stamp for stamp in (watermark, cursor) if stamp is not None), default=None)
             latest_states = load_states()
             latest_states[environment] = {
                 "backfilled": bool(latest_states.get(environment, {}).get("backfilled")) or backfill,
@@ -219,18 +270,18 @@ def sync(
         return environment_total, len(rows)
 
     try:
-        while max_pages is None or pages < max_pages:
+        if cursor is not None:
+            start = cursor - LOOKBACK
+        else:
+            start = _first_window(environment, HISTORY_START, until, window)
+        while start < until and (max_pages is None or pages < max_pages):
             if should_stop is not None and should_stop():
                 break
-            response = list_traces(
-                page=page,
-                limit=page_size,
-                from_timestamp=cursor,
-                order_by="timestamp.asc",
-                fields=LIST_FIELDS,
-                env=environment,
-            )
-            batch = [row_of(trace, environment) for trace in getattr(response, "data", []) or []]
+            end = min(start + window, until)
+            batch = [
+                row_of(trace, environment)
+                for trace in list_traces(from_timestamp=start, to_timestamp=end, env=environment)
+            ]
             pages += 1
             fetched += len(batch)
             for row in batch:
@@ -241,6 +292,7 @@ def sync(
                 if not trace_id:
                     continue
                 current = merged.get(trace_id)
+                row = _merged(current, row)
                 if current is None:
                     added += 1
                 elif current != row:
@@ -251,17 +303,13 @@ def sync(
                 received[trace_id] = row
             if on_progress is not None:
                 on_progress(pages, fetched)
-
-            total_pages = getattr(getattr(response, "meta", None), "total_pages", None)
-            if not batch or (total_pages is not None and page >= total_pages):
-                completed = True
-                break
+            start = end
             if pages % SAVE_EVERY_PAGES == 0:
                 persist()
-            page += 1
+        completed = start >= until
     except BaseException:
-        # 조회가 중간에 끊겨도(호출 한도·네트워크·화면 중단) 받은 만큼은 남긴다. 오름차순으로
-        # 훑었으므로 받은 행의 최신 시각이 그대로 다음 실행의 시작점이 된다.
+        # 조회가 중간에 끊겨도(호출 한도·네트워크·화면 중단) 받은 만큼은 남긴다. 구간을 오래된
+        # 쪽부터 통째로 받았으므로 받은 행의 최신 시각이 그대로 다음 실행의 시작점이 된다.
         if pages:
             persist()
         raise
@@ -284,7 +332,7 @@ def sync_all(
     envs: Sequence[str],
     *,
     full: bool = False,
-    page_size: int = PAGE_SIZE,
+    window: timedelta = WINDOW,
     max_pages: int | None = None,
     on_progress: Callable[[str, int, int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
@@ -304,7 +352,7 @@ def sync_all(
             sync(
                 env,
                 full=full,
-                page_size=page_size,
+                window=window,
                 max_pages=max_pages,
                 on_progress=progress,
                 should_stop=should_stop,
