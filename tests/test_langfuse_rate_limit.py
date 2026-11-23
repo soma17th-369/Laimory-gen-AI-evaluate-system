@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from langfuse.api.core.api_error import ApiError
+from pydantic import SecretStr
 
 from app import langfuse_client
 
@@ -233,6 +234,23 @@ class ListTracesTests(unittest.TestCase):
         kwargs = client.api.observations.get_many.call_args.kwargs
         self.assertEqual((kwargs["limit"], kwargs["is_root_observation"]), (1, True))
 
+
+class ClientTests(unittest.TestCase):
+    def test_client_does_not_send_its_own_traces(self) -> None:
+        """켜 두면 MCP 서버의 도구 호출 span 까지 그 LangFuse 프로젝트에 트레이스로 올라간다."""
+        credentials = SimpleNamespace(
+            is_complete=True, public_key=SecretStr("pk"), secret_key=SecretStr("sk"), host="https://example"
+        )
+        settings = mock.Mock()
+        settings.langfuse_credentials.return_value = credentials
+        with (
+            mock.patch.dict(langfuse_client._clients, clear=True),
+            mock.patch.object(langfuse_client, "get_settings", return_value=settings),
+            mock.patch.object(langfuse_client, "Langfuse") as constructor,
+        ):
+            langfuse_client.get_client("dev")
+
+        self.assertIs(constructor.call_args.kwargs["tracing_enabled"], False)
 
 if __name__ == "__main__":
     unittest.main()

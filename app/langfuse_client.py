@@ -150,6 +150,9 @@ def get_client(env: str) -> Langfuse:
         public_key=credentials.public_key.get_secret_value(),
         secret_key=credentials.secret_key.get_secret_value(),
         host=credentials.host,
+        # 이 도구는 LangFuse 를 읽기만 한다. 켜 두면 SDK 가 전역 OpenTelemetry 에 붙어, MCP 서버가
+        # 도구 호출마다 만드는 span(gen_ai.* 속성)까지 그 프로젝트에 트레이스로 올린다.
+        tracing_enabled=False,
     )
     _clients[resolved] = client
     return client
