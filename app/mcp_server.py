@@ -269,7 +269,7 @@ def _start_sync(envs: list[str] | None) -> JobRef:
         def on_progress(_env: str, _pages: int, _fetched: int) -> None:
             job.done += 1
 
-        # 호출 한도 때문에 몇 시간이 걸릴 수도 있다. 연결이 끊기면 멈추고, 다음 수집이 이어받는다.
+        # 밀린 양이 많으면 오래 걸린다. 연결이 끊기면 멈추고, 다음 수집이 이어받는다.
         results = sync.sync_all(targets, on_progress=on_progress, should_stop=board.stopping.is_set)
         return [asdict(result) for result in results]
 

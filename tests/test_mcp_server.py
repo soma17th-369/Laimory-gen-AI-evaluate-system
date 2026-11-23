@@ -235,12 +235,23 @@ class ListLogsTests(McpTestCase):
 
 
 class SyncLogsTests(McpTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # 전체 수집이 구간 하나만 훑게 한다. 시작점 찾기도 LangFuse 를 부르지 않는다.
+        patches = [
+            mock.patch.object(sync, "_now", lambda: sync.HISTORY_START + sync.WINDOW),
+            mock.patch.object(sync, "has_traces", lambda **_kwargs: True),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
     def _trace(self) -> SimpleNamespace:
         return SimpleNamespace(
             id="t1",
             timestamp="2026-10-01T00:00:00+00:00",
             name="generate-timeline",
-            input={"taskId": _TASK_A},
+            session_id=_TASK_A,
             user_id=None,
             latency=1.0,
             total_cost=0.5,
@@ -248,7 +259,7 @@ class SyncLogsTests(McpTestCase):
 
     def test_new_logs_are_saved_through_a_job(self) -> None:
         def list_traces(**_kwargs):
-            return SimpleNamespace(data=[self._trace()], meta=SimpleNamespace(total_pages=1))
+            return [self._trace()]
 
         async def scenario(client: Client) -> None:
             job_id = (await self._ok(client, "sync_logs"))["jobId"]
@@ -272,7 +283,7 @@ class SyncLogsTests(McpTestCase):
 
         def list_traces(**_kwargs):
             release.wait(timeout=10)
-            return SimpleNamespace(data=[], meta=SimpleNamespace(total_pages=1))
+            return []
 
         async def scenario(client: Client) -> None:
             first = await self._ok(client, "sync_logs")

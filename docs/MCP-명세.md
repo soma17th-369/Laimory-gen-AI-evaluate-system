@@ -105,7 +105,7 @@ type Job = {
   jobId: string
   kind: "sync" | "judge"
   status: "queued" | "running" | "done" | "failed"
-  progress: { done: number; total: number | null }  // 수집은 페이지, 채점은 단계
+  progress: { done: number; total: number | null }  // 수집은 하루 단위 구간, 채점은 단계
   result: SyncResult[] | JudgeResult | null
   error: ToolError | null
 }
@@ -118,7 +118,7 @@ type SyncResult = {
   total: number               // 그 환경의 저장 행 수
   stored_total: number        // 전체 저장 행 수
   fetched: number
-  pages: number
+  pages: number               // 훑은 구간(하루) 수
   completed: boolean          // false 면 다시 sync_logs 를 부른다
 }
 

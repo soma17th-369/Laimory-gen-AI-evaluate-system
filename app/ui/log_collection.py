@@ -36,7 +36,7 @@ def _run(envs: list[str], *, full: bool, backfill: bool) -> None:
         with st.status(f"{label} 중…", expanded=False) as status:
             def on_progress(env: str, pages: int, fetched: int) -> None:
                 status.update(
-                    label=f"{label} 중… {environments.label(env)} · {pages}페이지 · {fetched}건 조회"
+                    label=f"{label} 중… {environments.label(env)} · {pages}구간(하루) · {fetched}건 조회"
                 )
 
             results = collect.sync_all(envs, full=full, on_progress=on_progress)
@@ -53,7 +53,7 @@ def _run(envs: list[str], *, full: bool, backfill: bool) -> None:
         )
         if not result.completed:
             st.warning(
-                f"{environments.label(result.environment)}: 마지막 페이지까지 가지 못했습니다. "
+                f"{environments.label(result.environment)}: 지금 시각까지 다 받지 못했습니다. "
                 "다시 실행하면 멈춘 지점부터 이어받습니다."
             )
     if results and not any(r.added or r.updated for r in results):

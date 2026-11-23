@@ -108,12 +108,23 @@ class RegistryThreadTests(ConcurrentTestCase):
 class SyncInterleavingTests(ConcurrentTestCase):
     """수집은 호출 한도를 기다리느라 오래 걸린다. 그 사이 다른 프로세스가 저장할 수 있다."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        # 전체 수집이 구간 하나만 훑게 한다. 시작점 찾기도 LangFuse 를 부르지 않는다.
+        patches = [
+            mock.patch.object(collect, "_now", lambda: collect.HISTORY_START + collect.WINDOW),
+            mock.patch.object(collect, "has_traces", lambda **_kwargs: True),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
     def _trace(self, trace_id: str, minute: int) -> SimpleNamespace:
         return SimpleNamespace(
             id=trace_id,
             timestamp=f"2026-08-01T00:{minute:02d}:00+00:00",
             name="main-agent",
-            input={"taskId": f"task-{trace_id}"},
+            session_id=f"task-{trace_id}",
             user_id=None,
             latency=1.0,
             total_cost=0.5,
@@ -122,9 +133,7 @@ class SyncInterleavingTests(ConcurrentTestCase):
     def _sync_while(self, other_process_saves) -> None:
         def list_traces(**_kwargs):
             other_process_saves()
-            return SimpleNamespace(
-                data=[self._trace("mine", 1)], meta=SimpleNamespace(total_pages=1)
-            )
+            return [self._trace("mine", 1)]
 
         with mock.patch.object(collect, "list_traces", list_traces):
             collect.sync(environments.DEV)
@@ -156,7 +165,7 @@ class SyncInterleavingTests(ConcurrentTestCase):
         with mock.patch.object(
             collect,
             "list_traces",
-            lambda **_kwargs: (save(), SimpleNamespace(data=[self._trace("mine", 1)], meta=SimpleNamespace(total_pages=1)))[1],
+            lambda **_kwargs: (save(), [self._trace("mine", 1)])[1],
         ):
             result = collect.sync(environments.DEV)
 
